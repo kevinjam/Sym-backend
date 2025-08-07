@@ -212,6 +212,19 @@ class NotificationService {
     return notification;
   }
 
+  // Mark all notifications as read
+  static async markAllAsRead(userId) {
+    const result = await Notification.updateMany(
+      { recipientId: userId, isRead: false },
+      { 
+        isRead: true, 
+        readAt: new Date() 
+      }
+    );
+    
+    return result;
+  }
+
   // Get user notifications
   static async getUserNotifications(userId, options = {}) {
     const { page = 1, limit = 20, unreadOnly = false } = options;
@@ -239,6 +252,138 @@ class NotificationService {
         pages: Math.ceil(total / limit)
       }
     };
+  }
+
+  // Send medication prescribed notification
+  static async sendMedicationPrescribedNotification(patientId, patientMedicationData, doctorData) {
+    try {
+      const notification = await this.createNotification({
+        recipientId: patientId,
+        senderId: doctorData._id,
+        type: 'medication_prescribed',
+        title: 'New Medication Prescribed',
+        message: `Dr. ${doctorData.lastName} has prescribed ${patientMedicationData.medicationId.name} for you.`,
+        priority: 'high',
+        data: {
+          medicationId: patientMedicationData._id.toString(),
+          medicationName: patientMedicationData.medicationId.name,
+          doctorId: doctorData._id.toString(),
+          doctorName: `Dr. ${doctorData.firstName} ${doctorData.lastName}`
+        }
+      });
+      
+      return notification;
+    } catch (error) {
+      console.error('Error sending medication prescribed notification:', error);
+      throw error;
+    }
+  }
+
+  // Send symptom reported notification
+  static async sendSymptomReportedNotification(doctorId, symptomData, patientData) {
+    try {
+      const notification = await this.createNotification({
+        recipientId: doctorId,
+        senderId: patientData._id,
+        type: 'symptom_reported',
+        title: 'New Symptom Reported',
+        message: `${patientData.firstName} ${patientData.lastName} has reported a ${symptomData.severity} symptom: ${symptomData.name}`,
+        priority: symptomData.severity === 'severe' ? 'urgent' : symptomData.severity === 'moderate' ? 'high' : 'normal',
+        data: {
+          symptomId: symptomData._id.toString(),
+          symptomName: symptomData.name,
+          severity: symptomData.severity,
+          patientId: patientData._id.toString(),
+          patientName: `${patientData.firstName} ${patientData.lastName}`
+        }
+      });
+      
+      return notification;
+    } catch (error) {
+      console.error('Error sending symptom reported notification:', error);
+      throw error;
+    }
+  }
+
+  // Send connection request notification
+  static async sendConnectionRequestNotification(doctorId, patientData, message) {
+    try {
+      const notification = await this.createNotification({
+        recipientId: doctorId,
+        senderId: patientData._id,
+        type: 'connection_request',
+        title: 'New Connection Request',
+        message: `${patientData.firstName} ${patientData.lastName} wants to connect with you for medication management.`,
+        priority: 'normal',
+        data: {
+          patientId: patientData._id.toString(),
+          patientName: `${patientData.firstName} ${patientData.lastName}`,
+          patientEmail: patientData.email,
+          message: message || ''
+        }
+      });
+      
+      return notification;
+    } catch (error) {
+      console.error('Error sending connection request notification:', error);
+      throw error;
+    }
+  }
+
+  // Send connection response notification
+  static async sendConnectionResponseNotification(patientId, doctorData, status, responseMessage) {
+    try {
+      const title = status === 'approved' ? 'Connection Approved' : 'Connection Rejected';
+      const message = status === 'approved' 
+        ? `Dr. ${doctorData.lastName} has approved your connection request.`
+        : `Dr. ${doctorData.lastName} has rejected your connection request.`;
+      
+      const notification = await this.createNotification({
+        recipientId: patientId,
+        senderId: doctorData._id,
+        type: 'connection_response',
+        title: title,
+        message: message,
+        priority: 'normal',
+        data: {
+          doctorId: doctorData._id.toString(),
+          doctorName: `Dr. ${doctorData.firstName} ${doctorData.lastName}`,
+          status: status,
+          responseMessage: responseMessage || ''
+        }
+      });
+      
+      return notification;
+    } catch (error) {
+      console.error('Error sending connection response notification:', error);
+      throw error;
+    }
+  }
+
+  // Send symptom resolved notification
+  static async sendSymptomResolvedNotification(patientId, symptomData, doctorData, notes) {
+    try {
+      const notification = await this.createNotification({
+        recipientId: patientId,
+        senderId: doctorData._id,
+        type: 'symptom_resolved',
+        title: 'Symptom Resolved',
+        message: `Dr. ${doctorData.lastName} has marked your symptom "${symptomData.name}" as resolved.`,
+        priority: 'normal',
+        data: {
+          symptomId: symptomData._id.toString(),
+          symptomName: symptomData.name,
+          doctorId: doctorData._id.toString(),
+          doctorName: `Dr. ${doctorData.firstName} ${doctorData.lastName}`,
+          notes: notes || ''
+        }
+      });
+      
+      return notification;
+    } catch (error) {
+      console.error('Error sending symptom resolved notification:', error);
+      throw error;
+    }
   }
 }
 

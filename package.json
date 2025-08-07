@@ -9,7 +9,10 @@
     "test": "jest",
     "test:coverage": "jest --coverage",
     "swagger": "swagger-jsdoc -d swaggerDef.js -o swagger.json",
-    "seed": "node utils/seedData.js",
+    "clear-db": "node utils/clearDatabase.js",
+    "seed-categories": "node utils/seedCategoriesAndDosageForms.js",
+    "create-test-patient": "node utils/createTestPatientAndPrescription.js",
+    "create-prescription": "node utils/createPrescriptionForExistingPatient.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },

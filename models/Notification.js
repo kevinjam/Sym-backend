@@ -15,7 +15,12 @@ const notificationSchema = new mongoose.Schema({
     enum: [
       'medication_reminder',
       'medication_stopped',
+      'medication_prescribed',
       'symptom_alert',
+      'symptom_reported',
+      'symptom_resolved',
+      'connection_request',
+      'connection_response',
       'doctor_message',
       'adherence_alert',
       'system_notification'

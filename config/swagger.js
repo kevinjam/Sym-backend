@@ -175,6 +175,36 @@ const options = {
             scheduledFor: { type: 'string', format: 'date-time' },
             createdAt: { type: 'string', format: 'date-time' }
           }
+        },
+        DoctorPatientRequest: {
+          type: 'object',
+          properties: {
+            _id: { type: 'string' },
+            patientId: { type: 'string' },
+            doctorId: { type: 'string' },
+            status: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+            message: { type: 'string' },
+            requestedAt: { type: 'string', format: 'date-time' },
+            respondedAt: { type: 'string', format: 'date-time' },
+            responseMessage: { type: 'string' },
+            isActive: { type: 'boolean' }
+          }
+        },
+        ConnectionRequest: {
+          type: 'object',
+          properties: {
+            doctorEmail: { type: 'string', format: 'email' },
+            message: { type: 'string' }
+          },
+          required: ['doctorEmail']
+        },
+        ConnectionResponse: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['approved', 'rejected'] },
+            responseMessage: { type: 'string' }
+          },
+          required: ['status']
         }
       }
     },
@@ -198,6 +228,10 @@ const options = {
       {
         name: 'Notification',
         description: 'Notification management and real-time updates'
+      },
+      {
+        name: 'Connection',
+        description: 'Doctor-patient connection request management'
       }
     ]
   },

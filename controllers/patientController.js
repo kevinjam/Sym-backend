@@ -177,12 +177,12 @@ class PatientController {
 
       await symptom.save();
 
-      // Send alert to doctor if symptom is moderate or severe and medication is associated
-      if ((severity === 'moderate' || severity === 'severe') && doctorId) {
-        await NotificationService.sendSymptomAlert(
-          req.user._id,
+      // Send notification to doctor if medication is associated
+      if (doctorId) {
+        await NotificationService.sendSymptomReportedNotification(
           doctorId,
-          symptom
+          symptom,
+          req.user
         );
       }
 

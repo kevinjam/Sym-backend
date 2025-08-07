@@ -69,12 +69,7 @@ A comprehensive Node.js backend API for the SYM Medication Management App, desig
    docker run -d -p 27017:27017 --name mongodb mongo:6.0
    ```
 
-4. **Seed Database** (Optional)
-   ```bash
-   npm run seed
-   ```
-
-5. **Start Development Server**
+4. **Start Development Server**
    ```bash
    npm run dev
    ```
@@ -111,7 +106,7 @@ The API uses JWT-based authentication. Include the token in the Authorization he
 Authorization: Bearer <your-jwt-token>
 ```
 
-### Sample Login Flow
+### Login Flow
 
 ```bash
 # Register a new user
@@ -294,7 +289,7 @@ User → Notification (recipient/sender)
 - `notifications-updated` - Real-time notification updates
 - `medication-reminder` - Medication reminder alerts
 
-### Sample WebSocket Connection
+### WebSocket Connection
 
 const socket = io('http://localhost:9000');
 
@@ -327,8 +322,9 @@ npm run test:coverage
 | `npm start` | Start production server |
 | `npm run dev` | Start development server with nodemon |
 | `npm test` | Run test suite |
-| `npm run seed` | Seed database with sample data |
+
 | `npm run swagger` | Generate Swagger documentation |
+| `npm run clear-db` | Clear all data from database |
 
 ## 🚀 Deployment
 

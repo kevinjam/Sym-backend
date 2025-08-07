@@ -11,13 +11,28 @@ class DoctorController {
       const { search, page = 1, limit = 20 } = req.query;
       const skip = (page - 1) * limit;
 
-      // Find patients prescribed by this doctor
-      const patientIds = await PatientMedication.distinct('patientId', {
+      // Import the DoctorPatientRequest model
+      const DoctorPatientRequest = require('../models/DoctorPatientRequest');
+
+      // Find patients connected to this doctor (approved connections)
+      const approvedRequests = await DoctorPatientRequest.find({
+        doctorId: req.user._id,
+        status: 'approved',
+        isActive: true
+      });
+
+      const connectedPatientIds = approvedRequests.map(request => request.patientId);
+
+      // Also include patients with prescriptions (for backward compatibility)
+      const prescribedPatientIds = await PatientMedication.distinct('patientId', {
         prescribedBy: req.user._id
       });
 
+      // Combine both lists and remove duplicates
+      const allPatientIds = [...new Set([...connectedPatientIds, ...prescribedPatientIds])];
+
       let query = { 
-        _id: { $in: patientIds },
+        _id: { $in: allPatientIds },
         role: 'patient',
         isActive: true 
       };
@@ -141,18 +156,11 @@ class DoctorController {
       await patientMedication.save();
 
       // Send notification to patient
-      await NotificationService.createNotification({
-        recipientId: patientId,
-        senderId: req.user._id,
-        type: 'system_notification',
-        title: 'New Medication Prescribed',
-        message: `Dr. ${req.user.lastName} has prescribed ${medication.name} for you.`,
-        priority: 'normal',
-        data: {
-          medicationId: medication._id,
-          patientMedicationId: patientMedication._id
-        }
-      });
+      await NotificationService.sendMedicationPrescribedNotification(
+        patientId, 
+        await patientMedication.populate('medicationId'), 
+        req.user
+      );
 
       res.status(201).json({
         message: 'Medication prescribed successfully',
@@ -212,6 +220,8 @@ class DoctorController {
   // Get symptoms reported by patients
   static async getSymptoms(req, res) {
     try {
+      console.log('getSymptoms called for doctor:', req.user._id);
+      
       const { severity, isResolved, patientId } = req.query;
       const query = {};
 
@@ -224,9 +234,13 @@ class DoctorController {
         prescribedBy: req.user._id
       });
 
+      console.log('Doctor ID:', req.user._id);
+      console.log('Patient IDs found:', patientIds);
+
       if (patientIds.length > 0) {
         query.patientId = { $in: patientIds };
       } else {
+        console.log('No patients found for this doctor, returning empty symptoms');
         return res.json({ symptoms: [] });
       }
 
@@ -235,9 +249,22 @@ class DoctorController {
         .populate('patientMedicationId')
         .sort({ createdAt: -1 });
 
-      res.json({ symptoms });
+      console.log('Symptoms found:', symptoms.length);
+
+      // Map the populated patientId to patient for frontend compatibility
+      const mappedSymptoms = symptoms.map(symptom => {
+        const symptomObj = symptom.toObject();
+        if (symptomObj.patientId) {
+          symptomObj.patient = symptomObj.patientId;
+          delete symptomObj.patientId;
+        }
+        return symptomObj;
+      });
+
+      res.json({ symptoms: mappedSymptoms });
     } catch (error) {
       console.error('Get symptoms error:', error);
+      console.error('Error stack:', error.stack);
       res.status(500).json({ error: 'Failed to get symptoms' });
     }
   }
@@ -270,6 +297,14 @@ class DoctorController {
       symptom.reportedToDoctor = true;
 
       await symptom.save();
+
+      // Send notification to patient
+      await NotificationService.sendSymptomResolvedNotification(
+        symptom.patientId,
+        symptom,
+        req.user,
+        notes
+      );
 
       res.json({
         message: 'Symptom marked as resolved',
