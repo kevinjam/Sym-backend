@@ -33,6 +33,7 @@
     "joi": "^17.9.2",
     "firebase-admin": "^11.10.1",
     "node-cron": "^3.0.2",
+    "cron": "^4.3.2",
     "socket.io": "^4.7.2"
   },
   "devDependencies": {
