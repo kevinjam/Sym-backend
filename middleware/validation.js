@@ -18,10 +18,16 @@ const validate = (schema) => {
 const authSchemas = {
   register: Joi.object({
     email: Joi.string().email().required(),
-    password: Joi.string().min(6).required(),
+    password: Joi.string().min(6).when('provider', {
+      is: 'local',
+      then: Joi.required(),
+      otherwise: Joi.optional()
+    }),
     firstName: Joi.string().min(2).max(50).required(),
     lastName: Joi.string().min(2).max(50).required(),
     role: Joi.string().valid('patient', 'doctor').required(),
+    provider: Joi.string().valid('local', 'google', 'facebook').default('local'),
+    providerId: Joi.string().optional(),
     phoneNumber: Joi.string().pattern(/^\+?[\d\s\-\(\)]+$/).optional(),
     dateOfBirth: Joi.date().max('now').optional(),
     gender: Joi.string().valid('male', 'female', 'other').optional(),
@@ -47,6 +53,15 @@ const authSchemas = {
   login: Joi.object({
     email: Joi.string().email().required(),
     password: Joi.string().required()
+  }),
+
+  googleAuth: Joi.object({
+    idToken: Joi.string().required(),
+    role: Joi.string().valid('patient', 'doctor').required()
+  }),
+
+  verifyGoogleToken: Joi.object({
+    idToken: Joi.string().required()
   })
 };
 

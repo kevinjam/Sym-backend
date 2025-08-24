@@ -19,6 +19,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const schedulerService = require('./utils/scheduler');
 const cronJob = require('./config/cron');
+require('./config/firebase'); // Initialize Firebase
 
 const app = express();
 const server = http.createServer(app);

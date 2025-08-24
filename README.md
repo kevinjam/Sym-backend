@@ -20,6 +20,7 @@ A comprehensive Node.js backend API for the SYM Medication Management App, desig
 
 ### Technical Features
 - **Role-based Access Control**: Secure authentication for patients and doctors
+- **Social Authentication**: Google Sign-In integration using Firebase
 - **Real-time Updates**: WebSocket support for live notifications
 - **Push Notifications**: Firebase integration for mobile notifications
 - **Comprehensive API**: RESTful API with Swagger documentation
@@ -30,7 +31,7 @@ A comprehensive Node.js backend API for the SYM Medication Management App, desig
 - **Runtime**: Node.js 18+
 - **Framework**: Express.js
 - **Database**: MongoDB with Mongoose ODM
-- **Authentication**: JWT (JSON Web Tokens)
+- **Authentication**: JWT (JSON Web Tokens) + Google Sign-In
 - **Validation**: Joi for request validation
 - **Documentation**: Swagger/OpenAPI 3.0
 - **Real-time**: Socket.io
@@ -90,6 +91,23 @@ A comprehensive Node.js backend API for the SYM Medication Management App, desig
    ```bash
    docker-compose down
    ```
+
+## 🔐 Authentication
+
+The backend supports multiple authentication methods:
+
+### Local Authentication
+- Traditional email/password registration and login
+- Password hashing with bcrypt
+- JWT token generation for sessions
+
+### Google Authentication
+- Google Sign-In integration using Firebase
+- Automatic user creation and profile sync
+- Verified email accounts only
+- Seamless login for returning users
+
+For detailed setup instructions, see [GOOGLE_AUTH_SETUP.md](docs/GOOGLE_AUTH_SETUP.md)
 
 ## 📚 API Documentation
 

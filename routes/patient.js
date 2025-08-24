@@ -1,6 +1,6 @@
 const express = require('express');
 const { authenticateToken, requirePatient } = require('../middleware/auth');
-const { validate, symptomSchemas } = require('../middleware/validation');
+const { validate, symptomSchemas, medicationSchemas } = require('../middleware/validation');
 const PatientController = require('../controllers/patientController');
 
 const router = express.Router();
@@ -33,6 +33,87 @@ router.use(requirePatient);
  *         description: Medication list retrieved successfully
  */
 router.get('/medications', PatientController.getMedications);
+
+/**
+ * @swagger
+ * /api/patient/medications:
+ *   post:
+ *     summary: Add a new medication for the patient
+ *     tags: [Patient]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - medicationId
+ *               - dosage
+ *               - schedule
+ *             properties:
+ *               medicationId:
+ *                 type: string
+ *                 description: ID of the medication from the catalog
+ *               dosage:
+ *                 type: object
+ *                 required:
+ *                   - amount
+ *                   - unit
+ *                   - frequency
+ *                 properties:
+ *                   amount:
+ *                     type: number
+ *                     minimum: 0.1
+ *                   unit:
+ *                     type: string
+ *                     enum: [mg, mcg, ml, units, puffs, tablets, capsules]
+ *                   frequency:
+ *                     type: string
+ *                     enum: [once_daily, twice_daily, three_times_daily, four_times_daily, as_needed, weekly, monthly]
+ *                   instructions:
+ *                     type: string
+ *               schedule:
+ *                 type: array
+ *                 minItems: 1
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - time
+ *                   properties:
+ *                     time:
+ *                       type: string
+ *                       pattern: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
+ *                       description: Time in HH:MM format
+ *                     isActive:
+ *                       type: boolean
+ *                       default: true
+ *               priority:
+ *                 type: string
+ *                 enum: [low, medium, high, critical]
+ *                 default: medium
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *                 default: current date
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *               notes:
+ *                 type: string
+ *                 maxLength: 500
+ *     responses:
+ *       201:
+ *         description: Medication added successfully
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: Medication not found in catalog
+ *       500:
+ *         description: Server error
+ */
+router.post('/medications', validate(medicationSchemas.prescribe), PatientController.addMedication);
 
 /**
  * @swagger
@@ -89,12 +170,12 @@ router.post('/medications/:id/miss', PatientController.missMedication);
  *           schema:
  *             type: object
  *             required:
- *               - patientMedicationId
  *               - name
  *               - severity
  *             properties:
  *               patientMedicationId:
  *                 type: string
+ *                 description: Optional - ID of related medication
  *               name:
  *                 type: string
  *               description:
@@ -104,8 +185,10 @@ router.post('/medications/:id/miss', PatientController.missMedication);
  *                 enum: [mild, moderate, severe]
  *               category:
  *                 type: string
+ *                 enum: [gastrointestinal, cardiovascular, respiratory, neurological, dermatological, musculoskeletal, psychological, other]
  *               duration:
  *                 type: string
+ *                 enum: [minutes, hours, days, weeks, months]
  *     responses:
  *       201:
  *         description: Symptom reported successfully

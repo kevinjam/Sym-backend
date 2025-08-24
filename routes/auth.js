@@ -180,4 +180,67 @@ router.post('/fcm-token', authenticateToken, AuthController.updateFcmToken);
  */
 router.delete('/fcm-token', authenticateToken, AuthController.removeFcmToken);
 
+/**
+ * @swagger
+ * /api/auth/google:
+ *   post:
+ *     summary: Google authentication (signup/login)
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - idToken
+ *               - role
+ *             properties:
+ *               idToken:
+ *                 type: string
+ *                 description: Google ID token from client
+ *               role:
+ *                 type: string
+ *                 enum: [patient, doctor]
+ *                 description: User role
+ *     responses:
+ *       200:
+ *         description: Google login successful
+ *       201:
+ *         description: Google signup successful
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Invalid Google token
+ */
+router.post('/google', AuthController.googleAuth);
+
+/**
+ * @swagger
+ * /api/auth/google/verify:
+ *   post:
+ *     summary: Verify Google ID token
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - idToken
+ *             properties:
+ *               idToken:
+ *                 type: string
+ *                 description: Google ID token to verify
+ *     responses:
+ *       200:
+ *         description: Token verified successfully
+ *       400:
+ *         description: Token is required
+ *       401:
+ *         description: Invalid or expired token
+ */
+router.post('/google/verify', AuthController.verifyGoogleToken);
+
 module.exports = router; 

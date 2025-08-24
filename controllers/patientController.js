@@ -1,8 +1,60 @@
+const mongoose = require('mongoose');
 const PatientMedication = require('../models/PatientMedication');
 const Symptom = require('../models/Symptom');
+const Medication = require('../models/Medication');
 const NotificationService = require('../utils/notificationService');
 
 class PatientController {
+  // Add a new medication for the patient
+  static async addMedication(req, res) {
+    try {
+      const { medicationId, dosage, schedule, priority, startDate, endDate, notes } = req.body;
+
+      // Verify the medication exists in the catalog
+      const medication = await Medication.findById(medicationId);
+      if (!medication) {
+        return res.status(404).json({ error: 'Medication not found in catalog' });
+      }
+
+      // Create new patient medication
+      const patientMedication = new PatientMedication({
+        patientId: req.user._id,
+        medicationId: medicationId,
+        prescribedBy: req.user._id, // Patient is self-prescribing
+        dosage: {
+          amount: dosage.amount,
+          unit: dosage.unit,
+          frequency: dosage.frequency,
+          instructions: dosage.instructions || ''
+        },
+        schedule: schedule.map(timeSlot => ({
+          time: timeSlot.time,
+          isActive: timeSlot.isActive !== false // Default to true if not specified
+        })),
+        priority: priority || 'medium',
+        startDate: startDate ? new Date(startDate) : new Date(),
+        endDate: endDate ? new Date(endDate) : null,
+        notes: notes || '',
+        status: 'active',
+        isActive: true
+      });
+
+      await patientMedication.save();
+
+      // Populate the medication details for response
+      await patientMedication.populate('medicationId');
+      await patientMedication.populate('prescribedBy', 'firstName lastName');
+
+      res.status(201).json({
+        message: 'Medication added successfully',
+        patientMedication
+      });
+    } catch (error) {
+      console.error('Add medication error:', error);
+      res.status(500).json({ error: 'Failed to add medication' });
+    }
+  }
+
   // Get patient's medication list
   static async getMedications(req, res) {
     try {
@@ -152,6 +204,11 @@ class PatientController {
 
       // If patientMedicationId is provided, verify it belongs to the patient
       if (patientMedicationId) {
+        // Validate ObjectId format before querying
+        if (!mongoose.Types.ObjectId.isValid(patientMedicationId)) {
+          return res.status(400).json({ error: 'Invalid medication ID format' });
+        }
+        
         patientMedication = await PatientMedication.findOne({
           _id: patientMedicationId,
           patientId: req.user._id

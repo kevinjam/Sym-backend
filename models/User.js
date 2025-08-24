@@ -11,8 +11,23 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true,
+    required: function() {
+      return !this.provider; // Password is required only if not using social login
+    },
     minlength: 6
+  },
+  provider: {
+    type: String,
+    enum: ['local', 'google', 'facebook'],
+    default: 'local'
+  },
+  providerId: {
+    type: String, // Google/Facebook user ID
+    sparse: true
+  },
+  emailVerified: {
+    type: Boolean,
+    default: false
   },
   role: {
     type: String,
@@ -82,6 +97,9 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   
+  // Skip password hashing for social login users
+  if (this.provider !== 'local') return next();
+  
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -93,6 +111,10 @@ userSchema.pre('save', async function(next) {
 
 // Compare password method
 userSchema.methods.comparePassword = async function(candidatePassword) {
+  // Social login users don't have passwords to compare
+  if (this.provider !== 'local') {
+    return false;
+  }
   return bcrypt.compare(candidatePassword, this.password);
 };
 
