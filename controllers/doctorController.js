@@ -1,366 +1,403 @@
-const User = require('../models/User');
-const PatientMedication = require('../models/PatientMedication');
-const Symptom = require('../models/Symptom');
-const Medication = require('../models/Medication');
-const NotificationService = require('../utils/notificationService');
+const Doctor = require('../models/Doctor');
 
 class DoctorController {
-  // Get doctor's patient list
-  static async getPatients(req, res) {
+  // Get all doctors with search, filtering, and pagination
+  static async getDoctors(req, res) {
     try {
-      const { search, page = 1, limit = 20 } = req.query;
-      const skip = (page - 1) * limit;
+      const {
+        page = 1,
+        limit = 10,
+        search,
+        specialty,
+        city,
+        state,
+        minRating = 0,
+        maxFee,
+        available,
+        sortBy = 'averageRating',
+        sortOrder = 'desc'
+      } = req.query;
 
-      // Import the DoctorPatientRequest model
-      const DoctorPatientRequest = require('../models/DoctorPatientRequest');
+      // Build query
+      let query = { isActive: true };
 
-      // Find patients connected to this doctor (approved connections)
-      const approvedRequests = await DoctorPatientRequest.find({
-        doctorId: req.user._id,
-        status: 'approved',
-        isActive: true
-      });
-
-      const connectedPatientIds = approvedRequests.map(request => request.patientId);
-
-      // Also include patients with prescriptions (for backward compatibility)
-      const prescribedPatientIds = await PatientMedication.distinct('patientId', {
-        prescribedBy: req.user._id
-      });
-
-      // Combine both lists and remove duplicates
-      const allPatientIds = [...new Set([...connectedPatientIds, ...prescribedPatientIds])];
-
-      let query = { 
-        _id: { $in: allPatientIds },
-        role: 'patient',
-        isActive: true 
-      };
-
+      // Search functionality
       if (search) {
-        query.$or = [
-          { firstName: { $regex: search, $options: 'i' } },
-          { lastName: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } }
-        ];
+        query.$text = { $search: search };
       }
 
-      const patients = await User.find(query)
-        .select('firstName lastName email phoneNumber conditions lastLogin')
-        .sort({ lastLogin: -1 })
-        .skip(skip)
-        .limit(parseInt(limit));
+      // Filter by specialty
+      if (specialty) {
+        query.specialty = { $regex: specialty, $options: 'i' };
+      }
 
-      const total = await User.countDocuments(query);
+      // Filter by location
+      if (city) {
+        query['address.city'] = { $regex: city, $options: 'i' };
+      }
+      if (state) {
+        query['address.state'] = { $regex: state, $options: 'i' };
+      }
 
-      res.json({
-        patients,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+      // Filter by rating
+      if (minRating) {
+        query.averageRating = { $gte: parseFloat(minRating) };
+      }
+
+      // Filter by consultation fee
+      if (maxFee) {
+        query.consultationFee = { $lte: parseFloat(maxFee) };
+      }
+
+      // Filter by availability
+      if (available === 'true') {
+        query.isAvailable = true;
+        query.acceptsNewPatients = true;
+      }
+
+      // Build sort object
+      const sort = {};
+      sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+      // Execute query with pagination
+      const doctors = await Doctor.find(query)
+        .select('-reviews -education -certifications -insuranceAccepted -languages')
+        .sort(sort)
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .exec();
+
+      const total = await Doctor.countDocuments(query);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          doctors,
           total,
+          page: parseInt(page),
+          pages: Math.ceil(total / limit),
+          hasNext: page < Math.ceil(total / limit),
+          hasPrev: page > 1
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching doctors:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch doctors',
+        error: error.message
+      });
+    }
+  }
+
+  // Get doctor by ID
+  static async getDoctorById(req, res) {
+    try {
+      const { id } = req.params;
+
+      const doctor = await Doctor.findById(id);
+      if (!doctor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Doctor not found'
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: doctor
+      });
+    } catch (error) {
+      console.error('Error fetching doctor:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch doctor',
+        error: error.message
+      });
+    }
+  }
+
+  // Get doctor specialties
+  static async getSpecialties(req, res) {
+    try {
+      const specialties = await Doctor.distinct('specialty', { isActive: true });
+      
+      // Sort specialties alphabetically
+      const sortedSpecialties = specialties.sort();
+
+      res.status(200).json({
+        success: true,
+        data: sortedSpecialties
+      });
+    } catch (error) {
+      console.error('Error fetching specialties:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch specialties',
+        error: error.message
+      });
+    }
+  }
+
+  // Get popular doctors (highest rated)
+  static async getPopularDoctors(req, res) {
+    try {
+      const { limit = 5 } = req.query;
+
+      const doctors = await Doctor.find({ 
+        isActive: true, 
+        averageRating: { $gte: 4.0 },
+        totalReviews: { $gte: 5 }
+      })
+        .select('-reviews -education -certifications -insuranceAccepted -languages')
+        .sort({ averageRating: -1, totalReviews: -1 })
+        .limit(parseInt(limit))
+        .exec();
+
+      res.status(200).json({
+        success: true,
+        data: doctors
+      });
+    } catch (error) {
+      console.error('Error fetching popular doctors:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch popular doctors',
+        error: error.message
+      });
+    }
+  }
+
+  // Get doctors by specialty
+  static async getDoctorsBySpecialty(req, res) {
+    try {
+      const { specialty } = req.params;
+      const { page = 1, limit = 10 } = req.query;
+
+      const doctors = await Doctor.find({ 
+        specialty: { $regex: specialty, $options: 'i' },
+        isActive: true 
+      })
+        .select('-reviews -education -certifications -insuranceAccepted -languages')
+        .sort({ averageRating: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .exec();
+
+      const total = await Doctor.countDocuments({ 
+        specialty: { $regex: specialty, $options: 'i' },
+        isActive: true 
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          doctors,
+          total,
+          page: parseInt(page),
           pages: Math.ceil(total / limit)
         }
       });
     } catch (error) {
-      console.error('Get patients error:', error);
-      res.status(500).json({ error: 'Failed to get patients' });
+      console.error('Error fetching doctors by specialty:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch doctors by specialty',
+        error: error.message
+      });
     }
   }
 
-  // Get patient details
-  static async getPatientDetails(req, res) {
+  // Add a review for a doctor
+  static async addReview(req, res) {
     try {
-      const patient = await User.findOne({
-        _id: req.params.id,
-        role: 'patient',
-        isActive: true
-      }).select('-password');
+      const { id } = req.params;
+      const { rating, comment } = req.body;
+      const patientId = req.user.id;
 
-      if (!patient) {
-        return res.status(404).json({ error: 'Patient not found' });
+      const doctor = await Doctor.findById(id);
+      if (!doctor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Doctor not found'
+        });
       }
 
-      // Get patient's medications
-      const medications = await PatientMedication.find({
-        patientId: req.params.id,
-        prescribedBy: req.user._id
-      }).populate('medicationId');
-
-      // Get patient's symptoms
-      const symptoms = await Symptom.find({
-        patientId: req.params.id
-      }).populate('patientMedicationId');
-
-      res.json({
-        patient,
-        medications,
-        symptoms
-      });
-    } catch (error) {
-      console.error('Get patient details error:', error);
-      res.status(500).json({ error: 'Failed to get patient details' });
-    }
-  }
-
-  // Prescribe medication to patient
-  static async prescribeMedication(req, res) {
-    try {
-      const { patientId, medicationId, dosage, schedule, priority, startDate, endDate, notes } = req.body;
-
-      // Verify patient exists
-      const patient = await User.findOne({
-        _id: patientId,
-        role: 'patient',
-        isActive: true
-      });
-
-      if (!patient) {
-        return res.status(404).json({ error: 'Patient not found' });
-      }
-
-      // Verify medication exists and is approved
-      const medication = await Medication.findOne({
-        _id: medicationId,
-        isApproved: true
-      });
-
-      if (!medication) {
-        return res.status(404).json({ error: 'Medication not found or not approved' });
-      }
-
-      // Check if medication is already prescribed to this patient
-      const existingPrescription = await PatientMedication.findOne({
-        patientId,
-        medicationId,
-        status: 'active'
-      });
-
-      if (existingPrescription) {
-        return res.status(400).json({ error: 'Medication already prescribed to this patient' });
-      }
-
-      // Create patient medication
-      const patientMedication = new PatientMedication({
-        patientId,
-        medicationId,
-        prescribedBy: req.user._id,
-        dosage,
-        schedule,
-        priority: priority || 'medium',
-        startDate: startDate || new Date(),
-        endDate,
-        notes
-      });
-
-      await patientMedication.save();
-
-      // Send notification to patient
-      await NotificationService.sendMedicationPrescribedNotification(
-        patientId, 
-        await patientMedication.populate('medicationId'), 
-        req.user
+      // Check if patient already reviewed this doctor
+      const existingReview = doctor.reviews.find(
+        review => review.patientId.toString() === patientId
       );
+
+      if (existingReview) {
+        return res.status(400).json({
+          success: false,
+          message: 'You have already reviewed this doctor'
+        });
+      }
+
+      // Add new review
+      doctor.reviews.push({
+        patientId,
+        rating,
+        comment
+      });
+
+      // Update average rating and total reviews
+      const totalRating = doctor.reviews.reduce((sum, review) => sum + review.rating, 0);
+      doctor.averageRating = totalRating / doctor.reviews.length;
+      doctor.totalReviews = doctor.reviews.length;
+
+      await doctor.save();
 
       res.status(201).json({
-        message: 'Medication prescribed successfully',
-        patientMedication: await patientMedication.populate('medicationId')
-      });
-    } catch (error) {
-      console.error('Prescribe medication error:', error);
-      res.status(500).json({ error: 'Failed to prescribe medication' });
-    }
-  }
-
-  // Stop a medication
-  static async stopMedication(req, res) {
-    try {
-      const { reason } = req.body;
-
-      if (!reason) {
-        return res.status(400).json({ error: 'Reason is required' });
-      }
-
-      const patientMedication = await PatientMedication.findOne({
-        _id: req.params.id,
-        prescribedBy: req.user._id,
-        status: 'active'
-      }).populate('medicationId');
-
-      if (!patientMedication) {
-        return res.status(404).json({ error: 'Medication not found' });
-      }
-
-      // Stop the medication
-      patientMedication.status = 'stopped';
-      patientMedication.reasonForStopping = reason;
-      patientMedication.stoppedBy = req.user._id;
-      patientMedication.stoppedAt = new Date();
-      patientMedication.isActive = false;
-
-      await patientMedication.save();
-
-      // Send notification to patient
-      await NotificationService.sendMedicationStoppedNotification(
-        patientMedication.patientId,
-        patientMedication,
-        reason
-      );
-
-      res.json({
-        message: 'Medication stopped successfully',
-        patientMedication
-      });
-    } catch (error) {
-      console.error('Stop medication error:', error);
-      res.status(500).json({ error: 'Failed to stop medication' });
-    }
-  }
-
-  // Get symptoms reported by patients
-  static async getSymptoms(req, res) {
-    try {
-      console.log('getSymptoms called for doctor:', req.user._id);
-      
-      const { severity, isResolved, patientId } = req.query;
-      const query = {};
-
-      if (severity) query.severity = severity;
-      if (isResolved !== undefined) query.isResolved = isResolved;
-      if (patientId) query.patientId = patientId;
-
-      // Get symptoms for patients prescribed by this doctor
-      const patientIds = await PatientMedication.distinct('patientId', {
-        prescribedBy: req.user._id
-      });
-
-      console.log('Doctor ID:', req.user._id);
-      console.log('Patient IDs found:', patientIds);
-
-      if (patientIds.length > 0) {
-        query.patientId = { $in: patientIds };
-      } else {
-        console.log('No patients found for this doctor, returning empty symptoms');
-        return res.json({ symptoms: [] });
-      }
-
-      const symptoms = await Symptom.find(query)
-        .populate('patientId', 'firstName lastName')
-        .populate('patientMedicationId')
-        .sort({ createdAt: -1 });
-
-      console.log('Symptoms found:', symptoms.length);
-
-      // Map the populated patientId to patient for frontend compatibility
-      const mappedSymptoms = symptoms.map(symptom => {
-        const symptomObj = symptom.toObject();
-        if (symptomObj.patientId) {
-          symptomObj.patient = symptomObj.patientId;
-          delete symptomObj.patientId;
+        success: true,
+        message: 'Review added successfully',
+        data: {
+          averageRating: doctor.averageRating,
+          totalReviews: doctor.totalReviews
         }
-        return symptomObj;
       });
-
-      res.json({ symptoms: mappedSymptoms });
     } catch (error) {
-      console.error('Get symptoms error:', error);
-      console.error('Error stack:', error.stack);
-      res.status(500).json({ error: 'Failed to get symptoms' });
+      console.error('Error adding review:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to add review',
+        error: error.message
+      });
     }
   }
 
-  // Mark symptom as resolved
-  static async resolveSymptom(req, res) {
+  // Get doctor reviews
+  static async getDoctorReviews(req, res) {
     try {
-      const { notes } = req.body;
+      const { id } = req.params;
+      const { page = 1, limit = 10 } = req.query;
 
-      const symptom = await Symptom.findById(req.params.id);
+      const doctor = await Doctor.findById(id)
+        .populate('reviews.patientId', 'firstName lastName profilePicture')
+        .select('reviews averageRating totalReviews');
 
-      if (!symptom) {
-        return res.status(404).json({ error: 'Symptom not found' });
+      if (!doctor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Doctor not found'
+        });
       }
 
-      // Verify this symptom belongs to a patient prescribed by this doctor
-      const patientMedication = await PatientMedication.findOne({
-        _id: symptom.patientMedicationId,
-        prescribedBy: req.user._id
+      // Paginate reviews
+      const startIndex = (page - 1) * limit;
+      const endIndex = startIndex + parseInt(limit);
+      const paginatedReviews = doctor.reviews.slice(startIndex, endIndex);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          reviews: paginatedReviews,
+          averageRating: doctor.averageRating,
+          totalReviews: doctor.totalReviews,
+          page: parseInt(page),
+          pages: Math.ceil(doctor.reviews.length / limit)
+        }
       });
+    } catch (error) {
+      console.error('Error fetching doctor reviews:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch doctor reviews',
+        error: error.message
+      });
+    }
+  }
 
-      if (!patientMedication) {
-        return res.status(403).json({ error: 'Not authorized to resolve this symptom' });
+  // Admin: Create a new doctor
+  static async createDoctor(req, res) {
+    try {
+      const doctorData = req.body;
+      
+      const doctor = new Doctor(doctorData);
+      await doctor.save();
+
+      res.status(201).json({
+        success: true,
+        message: 'Doctor created successfully',
+        data: doctor
+      });
+    } catch (error) {
+      console.error('Error creating doctor:', error);
+      if (error.code === 11000) {
+        return res.status(400).json({
+          success: false,
+          message: 'Doctor with this email or license number already exists'
+        });
       }
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create doctor',
+        error: error.message
+      });
+    }
+  }
 
-      symptom.isResolved = true;
-      symptom.resolvedDate = new Date();
-      symptom.doctorNotes = notes;
-      symptom.doctorId = req.user._id;
-      symptom.reportedToDoctor = true;
+  // Admin: Update doctor
+  static async updateDoctor(req, res) {
+    try {
+      const { id } = req.params;
+      const updateData = req.body;
 
-      await symptom.save();
-
-      // Send notification to patient
-      await NotificationService.sendSymptomResolvedNotification(
-        symptom.patientId,
-        symptom,
-        req.user,
-        notes
+      const doctor = await Doctor.findByIdAndUpdate(
+        id,
+        updateData,
+        { new: true, runValidators: true }
       );
 
-      res.json({
-        message: 'Symptom marked as resolved',
-        symptom
+      if (!doctor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Doctor not found'
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Doctor updated successfully',
+        data: doctor
       });
     } catch (error) {
-      console.error('Resolve symptom error:', error);
-      res.status(500).json({ error: 'Failed to resolve symptom' });
+      console.error('Error updating doctor:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update doctor',
+        error: error.message
+      });
     }
   }
 
-  // Get patient's adherence report
-  static async getPatientAdherence(req, res) {
+  // Admin: Delete doctor
+  static async deleteDoctor(req, res) {
     try {
-      const medications = await PatientMedication.find({
-        patientId: req.params.patientId,
-        prescribedBy: req.user._id
-      }).populate('medicationId');
+      const { id } = req.params;
 
-      const totalMedications = medications.length;
-      const activeMedications = medications.filter(m => m.status === 'active').length;
-      
-      const overallAdherence = totalMedications > 0 
-        ? Math.round(medications.reduce((sum, med) => sum + med.adherenceScore, 0) / totalMedications)
-        : 0;
+      const doctor = await Doctor.findByIdAndDelete(id);
+      if (!doctor) {
+        return res.status(404).json({
+          success: false,
+          message: 'Doctor not found'
+        });
+      }
 
-      const adherenceBreakdown = {
-        excellent: medications.filter(m => m.adherenceScore >= 90).length,
-        good: medications.filter(m => m.adherenceScore >= 80 && m.adherenceScore < 90).length,
-        fair: medications.filter(m => m.adherenceScore >= 60 && m.adherenceScore < 80).length,
-        poor: medications.filter(m => m.adherenceScore < 60).length
-      };
-
-      res.json({
-        totalMedications,
-        activeMedications,
-        overallAdherence,
-        adherenceBreakdown,
-        medications: medications.map(m => ({
-          id: m._id,
-          name: m.medicationId.name,
-          status: m.status,
-          adherenceScore: m.adherenceScore,
-          takenDoses: m.takenDoses,
-          missedDoses: m.missedDoses,
-          totalDoses: m.totalDoses,
-          lastTaken: m.lastTaken,
-          startDate: m.startDate,
-          endDate: m.endDate
-        }))
+      res.status(200).json({
+        success: true,
+        message: 'Doctor deleted successfully'
       });
     } catch (error) {
-      console.error('Get adherence report error:', error);
-      res.status(500).json({ error: 'Failed to get adherence report' });
+      console.error('Error deleting doctor:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to delete doctor',
+        error: error.message
+      });
     }
   }
 }
 
-module.exports = DoctorController; 
+module.exports = DoctorController;

@@ -183,10 +183,205 @@ const notificationSchemas = {
   })
 };
 
+// Support validation schemas
+const supportSchemas = {
+  createMessage: Joi.object({
+    category: Joi.string().valid('account', 'payments', 'technical', 'other').required(),
+    subject: Joi.string().min(5).max(200).required(),
+    message: Joi.string().min(10).max(2000).required()
+  })
+};
+
+// Bug Report validation schemas
+const bugReportSchemas = {
+  createBugReport: Joi.object({
+    category: Joi.string().valid('ui_issue', 'crash', 'performance', 'other').required(),
+    severity: Joi.string().min(2).max(50).required(),
+    title: Joi.string().min(5).max(200).required(),
+    description: Joi.string().min(10).max(2000).required(),
+    stepsToReproduce: Joi.string().max(1000).optional().allow(''),
+    expectedBehavior: Joi.string().max(500).optional().allow(''),
+    actualBehavior: Joi.string().max(500).optional().allow(''),
+    deviceInfo: Joi.object({
+      platform: Joi.string().required(),
+      deviceModel: Joi.string().required(),
+      osVersion: Joi.string().required(),
+      appVersion: Joi.string().required(),
+      screenResolution: Joi.string().optional(),
+      deviceId: Joi.string().optional()
+    }).required()
+  })
+};
+
+// Doctor validation schemas
+const doctorSchemas = {
+  createDoctor: Joi.object({
+    firstName: Joi.string().min(2).max(50).required(),
+    lastName: Joi.string().min(2).max(50).required(),
+    email: Joi.string().email().required(),
+    phoneNumber: Joi.string().required(),
+    specialty: Joi.string().min(2).max(100).required(),
+    subSpecialty: Joi.string().max(100).optional(),
+    licenseNumber: Joi.string().required(),
+    yearsOfExperience: Joi.number().min(0).max(50).required(),
+    hospitalName: Joi.string().min(2).max(200).required(),
+    clinicName: Joi.string().max(200).optional(),
+    address: Joi.object({
+      street: Joi.string().optional(),
+      city: Joi.string().optional(),
+      state: Joi.string().optional(),
+      zipCode: Joi.string().optional(),
+      country: Joi.string().default('USA')
+    }).optional(),
+    profilePicture: Joi.string().optional(),
+    bio: Joi.string().max(1000).optional(),
+    education: Joi.array().items(
+      Joi.object({
+        degree: Joi.string().required(),
+        institution: Joi.string().required(),
+        year: Joi.number().required()
+      })
+    ).optional(),
+    certifications: Joi.array().items(
+      Joi.object({
+        name: Joi.string().required(),
+        issuingOrganization: Joi.string().required(),
+        year: Joi.number().required()
+      })
+    ).optional(),
+    consultationFee: Joi.number().min(0).required(),
+    availableDays: Joi.array().items(
+      Joi.string().valid('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+    ).optional(),
+    availableHours: Joi.object({
+      start: Joi.string().required(),
+      end: Joi.string().required()
+    }).optional(),
+    acceptsNewPatients: Joi.boolean().default(true),
+    consultationTypes: Joi.array().items(
+      Joi.string().valid('in_person', 'video_call', 'phone_call', 'chat')
+    ).optional(),
+    languages: Joi.array().items(Joi.string()).optional(),
+    insuranceAccepted: Joi.array().items(Joi.string()).optional()
+  }),
+  updateDoctor: Joi.object({
+    firstName: Joi.string().min(2).max(50).optional(),
+    lastName: Joi.string().min(2).max(50).optional(),
+    email: Joi.string().email().optional(),
+    phoneNumber: Joi.string().optional(),
+    specialty: Joi.string().min(2).max(100).optional(),
+    subSpecialty: Joi.string().max(100).optional(),
+    yearsOfExperience: Joi.number().min(0).max(50).optional(),
+    hospitalName: Joi.string().min(2).max(200).optional(),
+    clinicName: Joi.string().max(200).optional(),
+    address: Joi.object({
+      street: Joi.string().optional(),
+      city: Joi.string().optional(),
+      state: Joi.string().optional(),
+      zipCode: Joi.string().optional(),
+      country: Joi.string().optional()
+    }).optional(),
+    profilePicture: Joi.string().optional(),
+    bio: Joi.string().max(1000).optional(),
+    consultationFee: Joi.number().min(0).optional(),
+    availableDays: Joi.array().items(
+      Joi.string().valid('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+    ).optional(),
+    availableHours: Joi.object({
+      start: Joi.string().optional(),
+      end: Joi.string().optional()
+    }).optional(),
+    isVerified: Joi.boolean().optional(),
+    isActive: Joi.boolean().optional(),
+    isAvailable: Joi.boolean().optional(),
+    acceptsNewPatients: Joi.boolean().optional(),
+    consultationTypes: Joi.array().items(
+      Joi.string().valid('in_person', 'video_call', 'phone_call', 'chat')
+    ).optional(),
+    languages: Joi.array().items(Joi.string()).optional(),
+    insuranceAccepted: Joi.array().items(Joi.string()).optional()
+  }),
+  addReview: Joi.object({
+    rating: Joi.number().min(1).max(5).required(),
+    comment: Joi.string().max(500).optional().allow('')
+  })
+};
+
+// Health Report validation schemas
+const healthReportSchemas = {
+  createHealthReport: Joi.object({
+    patient: Joi.string().required(),
+    doctor: Joi.string().optional(),
+    reportType: Joi.string().valid('general', 'blood_test', 'imaging', 'specialist', 'emergency').required(),
+    title: Joi.string().min(5).max(200).required(),
+    description: Joi.string().max(1000).optional().allow(''),
+    reportDate: Joi.date().optional(),
+    healthMetrics: Joi.array().items(
+      Joi.object({
+        name: Joi.string().required(),
+        value: Joi.string().required(),
+        unit: Joi.string().required(),
+        status: Joi.string().valid('normal', 'high', 'low', 'critical').default('normal'),
+        referenceRange: Joi.string().optional()
+      })
+    ).optional(),
+    testResults: Joi.array().items(
+      Joi.object({
+        testName: Joi.string().required(),
+        result: Joi.string().required(),
+        unit: Joi.string().optional(),
+        status: Joi.string().valid('normal', 'abnormal', 'critical').default('normal'),
+        referenceRange: Joi.string().optional(),
+        notes: Joi.string().optional()
+      })
+    ).optional(),
+    doctorNotes: Joi.string().max(2000).optional().allow(''),
+    recommendations: Joi.string().max(1000).optional().allow(''),
+    followUpRequired: Joi.boolean().default(false),
+    followUpDate: Joi.date().optional(),
+    tags: Joi.array().items(Joi.string()).optional()
+  }),
+  updateHealthReport: Joi.object({
+    doctor: Joi.string().optional(),
+    reportType: Joi.string().valid('general', 'blood_test', 'imaging', 'specialist', 'emergency').optional(),
+    title: Joi.string().min(5).max(200).optional(),
+    description: Joi.string().max(1000).optional().allow(''),
+    reportDate: Joi.date().optional(),
+    healthMetrics: Joi.array().items(
+      Joi.object({
+        name: Joi.string().required(),
+        value: Joi.string().required(),
+        unit: Joi.string().required(),
+        status: Joi.string().valid('normal', 'high', 'low', 'critical').default('normal'),
+        referenceRange: Joi.string().optional()
+      })
+    ).optional(),
+    testResults: Joi.array().items(
+      Joi.object({
+        testName: Joi.string().required(),
+        result: Joi.string().required(),
+        unit: Joi.string().optional(),
+        status: Joi.string().valid('normal', 'abnormal', 'critical').default('normal'),
+        referenceRange: Joi.string().optional(),
+        notes: Joi.string().optional()
+      })
+    ).optional(),
+    doctorNotes: Joi.string().max(2000).optional().allow(''),
+    recommendations: Joi.string().max(1000).optional().allow(''),
+    followUpRequired: Joi.boolean().optional(),
+    followUpDate: Joi.date().optional(),
+    tags: Joi.array().items(Joi.string()).optional()
+  })
+};
+
 module.exports = {
   validate,
   authSchemas,
   medicationSchemas,
   symptomSchemas,
-  notificationSchemas
+  notificationSchemas,
+  supportSchemas,
+  bugReportSchemas,
+  doctorSchemas,
+  healthReportSchemas
 }; 
