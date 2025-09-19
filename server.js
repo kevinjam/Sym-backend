@@ -19,6 +19,8 @@ const faqRoutes = require('./routes/faq');
 const supportRoutes = require('./routes/support');
 const bugReportRoutes = require('./routes/bugReport');
 const healthReportRoutes = require('./routes/healthReport');
+const prescriptionScannerRoutes = require('./routes/prescriptionScanner');
+const scannedPrescriptionRoutes = require('./routes/scannedPrescription');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const schedulerService = require('./utils/scheduler');
@@ -102,6 +104,8 @@ app.use('/api/support', supportRoutes);
 app.use('/api/bug-report', bugReportRoutes);
 app.use('/api/doctors', doctorRoutes);
 app.use('/api/health-reports', healthReportRoutes);
+app.use('/api/prescription', prescriptionScannerRoutes);
+app.use('/api/scanned-prescriptions', scannedPrescriptionRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
