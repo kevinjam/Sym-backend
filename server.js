@@ -10,6 +10,9 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const patientRoutes = require('./routes/patient');
 const doctorRoutes = require('./routes/doctor');
+const clinicRoutes = require('./routes/clinic');
+const providerRoutes = require('./routes/provider');
+const appointmentRoutes = require('./routes/appointment');
 const medicationRoutes = require('./routes/medication');
 const notificationRoutes = require('./routes/notification');
 const categoryRoutes = require('./routes/category');
@@ -21,6 +24,7 @@ const bugReportRoutes = require('./routes/bugReport');
 const healthReportRoutes = require('./routes/healthReport');
 const prescriptionScannerRoutes = require('./routes/prescriptionScanner');
 const scannedPrescriptionRoutes = require('./routes/scannedPrescription');
+const aiScannerRoutes = require('./routes/aiScanner');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const schedulerService = require('./utils/scheduler');
@@ -103,9 +107,13 @@ app.use('/api/faq', faqRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/bug-report', bugReportRoutes);
 app.use('/api/doctors', doctorRoutes);
+app.use('/api/clinics', clinicRoutes);
+app.use('/api/providers', providerRoutes);
+app.use('/api/appointments', appointmentRoutes);
 app.use('/api/health-reports', healthReportRoutes);
 app.use('/api/prescription', prescriptionScannerRoutes);
 app.use('/api/scanned-prescriptions', scannedPrescriptionRoutes);
+app.use('/api/ai-scanner', aiScannerRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
