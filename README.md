@@ -8,6 +8,7 @@ A comprehensive Node.js backend API for the SYM Medication Management App, desig
 - **Medication Management**: View categorized medication lists with color-coded priorities
 - **Adherence Tracking**: Track medication intake and calculate adherence scores
 - **Symptom Reporting**: Report symptoms related to medications with severity levels
+- **AI Health Reports**: Get AI-powered analysis of health symptoms and concerns
 - **Schedule Management**: View and manage medication schedules with reminders
 - **Real-time Notifications**: Receive push notifications for medication reminders and doctor alerts
 

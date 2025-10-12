@@ -564,6 +564,176 @@ const clearCache = async (req, res) => {
   }
 };
 
-module.exports = { getClinics, getClinicById, testScraper, clearCache };
+// GET /api/clinics/search - Search clinics by name, phone, or location
+const searchClinics = async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q || q.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Search query is required'
+      });
+    }
+
+    const query = q.trim();
+    console.log(`🔍 Searching clinics for: "${query}"`);
+
+    // Search in database first
+    const dbClinics = await Clinic.find({
+      $or: [
+        { name: new RegExp(query, "i") },
+        { phone: new RegExp(query, "i") },
+        { address: new RegExp(query, "i") },
+        { city: new RegExp(query, "i") },
+        { description: new RegExp(query, "i") }
+      ]
+    }).sort({ rating: -1, name: 1 }).limit(20);
+
+    // Map database results
+    const mappedDbClinics = dbClinics.map((c) => ({
+      id: String(c._id),
+      name: c.name,
+      address: c.address,
+      phone: c.phone || '',
+      hours: c.hours || '',
+      latitude: c.latitude,
+      longitude: c.longitude,
+      description: c.description || '',
+      rating: c.rating || 0,
+      acceptingNewPatients: c.acceptingNewPatients,
+      openNow: c.openNow,
+      offersReferrals: c.offersReferrals,
+      imageUrl: c.imageUrl || '',
+      city: c.city || '',
+      state: c.state || '',
+      website: '',
+      services: [],
+      specialties: []
+    }));
+
+    // Also search in Saint Alphonsus data (fallback clinics)
+    const saintAlphonsusClinics = [
+      {
+        id: 'saint-alphonsus-1',
+        name: 'Saint Alphonsus Family Medicine - Boise',
+        address: '6533 W Emerald St, Boise, ID 83704',
+        phone: '(208) 302-5200',
+        hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+        latitude: 43.6167,
+        longitude: -116.2000,
+        description: 'Comprehensive family medicine services with same-day appointments available. Part of Saint Alphonsus Health System.',
+        rating: 4.5,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: 'https://www.saintalphonsus.org/locations/family-medicine-boise',
+        city: 'Boise',
+        state: 'ID',
+        services: ['Primary Care', 'Preventive Medicine', 'Same-day Appointments', 'Chronic Disease Management'],
+        specialties: ['Family Medicine', 'Internal Medicine', 'Pediatrics']
+      },
+      {
+        id: 'saint-alphonsus-2',
+        name: 'Saint Alphonsus Medical Center - Boise',
+        address: '1055 N Curtis Rd, Boise, ID 83706',
+        phone: '(208) 367-2121',
+        hours: '24/7 Emergency Services',
+        latitude: 43.6155,
+        longitude: -116.2033,
+        description: 'Full-service medical center with emergency services, primary care, and specialty services.',
+        rating: 4.3,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: 'https://www.saintalphonsus.org/locations/medical-center-boise',
+        city: 'Boise',
+        state: 'ID',
+        services: ['Emergency Care', 'Primary Care', 'Specialty Services', 'Surgery', 'Imaging'],
+        specialties: ['Emergency Medicine', 'Cardiology', 'Orthopedics', 'Oncology', 'Neurology']
+      },
+      {
+        id: 'saint-alphonsus-3',
+        name: 'Saint Alphonsus Family Medicine - Meridian',
+        address: '3230 E Louise Dr, Meridian, ID 83642',
+        phone: '(208) 302-5200',
+        hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+        latitude: 43.6138,
+        longitude: -116.2102,
+        description: 'Family medicine practice serving Meridian and surrounding communities with comprehensive primary care.',
+        rating: 4.6,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: 'https://www.saintalphonsus.org/locations/family-medicine-meridian',
+        city: 'Meridian',
+        state: 'ID',
+        services: ['Primary Care', 'Preventive Medicine', 'Chronic Disease Management', 'Wellness Programs'],
+        specialties: ['Family Medicine', 'Internal Medicine', 'Women\'s Health']
+      },
+      {
+        id: 'boise-fallback-1',
+        name: 'Boise Family Medicine Clinic',
+        address: '123 Main St, Boise, ID 83702',
+        phone: '(208) 555-0111',
+        hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+        latitude: 43.6167,
+        longitude: -116.2000,
+        description: 'Primary care focused on long-term patient relationships and preventive care. Referrals to specialists available.',
+        rating: 4.6,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: '',
+        city: 'Boise',
+        state: 'ID',
+        services: ['Primary Care', 'Family Medicine', 'Preventive Care'],
+        specialties: ['Family Medicine', 'Internal Medicine', 'Pediatrics']
+      }
+    ];
+
+    // Filter Saint Alphonsus clinics based on search query
+    const filteredSaintAlphonsus = saintAlphonsusClinics.filter(clinic => {
+      const searchLower = query.toLowerCase();
+      return (
+        clinic.name.toLowerCase().includes(searchLower) ||
+        clinic.address.toLowerCase().includes(searchLower) ||
+        clinic.phone.includes(query) ||
+        clinic.city.toLowerCase().includes(searchLower) ||
+        clinic.description.toLowerCase().includes(searchLower)
+      );
+    });
+
+    // Combine results, prioritizing database results
+    const allResults = [...mappedDbClinics, ...filteredSaintAlphonsus];
+
+    // Remove duplicates based on name and address
+    const uniqueResults = allResults.filter((clinic, index, self) => 
+      index === self.findIndex(c => c.name === clinic.name && c.address === clinic.address)
+    );
+
+    console.log(`🔍 Found ${uniqueResults.length} clinics matching "${query}"`);
+
+    res.json({
+      success: true,
+      data: uniqueResults,
+      query: query,
+      count: uniqueResults.length
+    });
+
+  } catch (error) {
+    console.error('Error searching clinics:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to search clinics'
+    });
+  }
+};
+
+module.exports = { getClinics, getClinicById, searchClinics, testScraper, clearCache };
 
 

@@ -22,6 +22,8 @@ const faqRoutes = require('./routes/faq');
 const supportRoutes = require('./routes/support');
 const bugReportRoutes = require('./routes/bugReport');
 const healthReportRoutes = require('./routes/healthReport');
+const aiHealthReportRoutes = require('./routes/aiHealthReport');
+const adherenceRoutes = require('./routes/adherence');
 const prescriptionScannerRoutes = require('./routes/prescriptionScanner');
 const scannedPrescriptionRoutes = require('./routes/scannedPrescription');
 const aiScannerRoutes = require('./routes/aiScanner');
@@ -111,11 +113,7 @@ app.use('/api/clinics', clinicRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/health-reports', healthReportRoutes);
-app.use('/api/prescription', prescriptionScannerRoutes);
-app.use('/api/scanned-prescriptions', scannedPrescriptionRoutes);
-app.use('/api/ai-scanner', aiScannerRoutes);
-
-// Health check endpoint
+// Health check endpoint (must be before AI health routes)
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -123,6 +121,12 @@ app.get('/api/health', (req, res) => {
     environment: process.env.NODE_ENV 
   });
 });
+
+app.use('/api/health', aiHealthReportRoutes);
+app.use('/api', adherenceRoutes);
+app.use('/api/prescription', prescriptionScannerRoutes);
+app.use('/api/scanned-prescriptions', scannedPrescriptionRoutes);
+app.use('/api/ai-scanner', aiScannerRoutes);
 
 // CORS test endpoint
 app.get('/api/cors-test', (req, res) => {
