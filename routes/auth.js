@@ -243,4 +243,10 @@ router.post('/google', AuthController.googleAuth);
  */
 router.post('/google/verify', AuthController.verifyGoogleToken);
 
+// Test endpoint for Firebase configuration
+router.get('/test-firebase', AuthController.testFirebaseConfig);
+
+// Test endpoint for Firebase token verification
+router.post('/test-token', AuthController.testFirebaseToken);
+
 module.exports = router; 

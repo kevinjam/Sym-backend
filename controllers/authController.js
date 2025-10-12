@@ -321,6 +321,8 @@ class AuthController {
 
     } catch (error) {
       console.error('Google authentication error:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
       
       if (error.code === 'auth/id-token-expired') {
         return res.status(401).json({ error: 'Google token expired. Please try again.' });
@@ -330,7 +332,18 @@ class AuthController {
         return res.status(401).json({ error: 'Invalid Google token. Please try again.' });
       }
       
-      res.status(500).json({ error: 'Google authentication failed' });
+      if (error.code === 'auth/argument-error') {
+        return res.status(400).json({ 
+          error: 'Invalid token format',
+          details: 'The provided token is not a valid Firebase ID token'
+        });
+      }
+      
+      res.status(500).json({ 
+        error: 'Google authentication failed',
+        details: error.message,
+        code: error.code
+      });
     }
   }
 
@@ -368,6 +381,82 @@ class AuthController {
       }
       
       res.status(500).json({ error: 'Token verification failed' });
+    }
+  }
+
+  // Test endpoint to check Firebase Admin SDK configuration
+  static async testFirebaseConfig(req, res) {
+    try {
+      console.log('Testing Firebase Admin SDK configuration...');
+      
+      // Check if Firebase Admin SDK is initialized
+      if (!admin.apps.length) {
+        return res.status(500).json({ 
+          error: 'Firebase Admin SDK not initialized',
+          details: 'Check FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, and FIREBASE_CLIENT_EMAIL environment variables'
+        });
+      }
+
+      // Try to list users (this will fail if not properly configured)
+      const listUsersResult = await admin.auth().listUsers(1);
+      
+      res.json({
+        message: 'Firebase Admin SDK is properly configured',
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        hasPrivateKey: !!process.env.FIREBASE_PRIVATE_KEY,
+        userCount: listUsersResult.users.length
+      });
+
+    } catch (error) {
+      console.error('Firebase configuration test error:', error);
+      
+      res.status(500).json({ 
+        error: 'Firebase Admin SDK configuration error',
+        details: error.message,
+        code: error.code
+      });
+    }
+  }
+
+  // Test endpoint to verify a Firebase ID token
+  static async testFirebaseToken(req, res) {
+    try {
+      const { idToken } = req.body;
+
+      if (!idToken) {
+        return res.status(400).json({ error: 'Firebase ID token is required' });
+      }
+
+      console.log('Testing Firebase ID token verification...');
+      console.log('Token (first 50 chars):', idToken.substring(0, 50) + '...');
+
+      // Verify the Firebase ID token
+      const decodedToken = await admin.auth().verifyIdToken(idToken);
+      
+      res.json({
+        message: 'Firebase ID token is valid',
+        decoded: {
+          uid: decodedToken.uid,
+          email: decodedToken.email,
+          emailVerified: decodedToken.email_verified,
+          name: decodedToken.name,
+          picture: decodedToken.picture,
+          iss: decodedToken.iss,
+          aud: decodedToken.aud,
+          exp: decodedToken.exp,
+          iat: decodedToken.iat
+        }
+      });
+
+    } catch (error) {
+      console.error('Firebase token verification error:', error);
+      
+      res.status(400).json({ 
+        error: 'Firebase ID token verification failed',
+        details: error.message,
+        code: error.code
+      });
     }
   }
 }
