@@ -124,15 +124,27 @@ router.put('/profile', authenticateToken, AuthController.updateProfile);
  *   post:
  *     summary: Refresh JWT token
  *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *                 description: Refresh token
  *     responses:
  *       200:
  *         description: Token refreshed successfully
+ *       400:
+ *         description: Refresh token is required
  *       401:
- *         description: Unauthorized
+ *         description: Invalid or expired refresh token
  */
-router.post('/refresh', authenticateToken, AuthController.refreshToken);
+router.post('/refresh', AuthController.refreshToken);
 
 /**
  * @swagger

@@ -2,35 +2,86 @@ const axios = require('axios');
 const Clinic = require('../models/Clinic');
 const { fetchSaintAlphonsusLocations, filterLocationsByCityState, getCityCoordinates, clearAllCaches } = require('../utils/saintAlphonsusScraper');
 
-// Minimal NPI Registry fetch for clinics/providers (organization endpoint)
-const fetchClinicsFromNPI = async ({ city, state, specialty, limit = 20 }) => {
+// Helper function to check if a city is in Idaho
+function isIdahoCity(cityName) {
+  const idahoCities = [
+    'boise', 'meridian', 'nampa', 'eagle', 'caldwell', 'kuna', 'garden city',
+    'star', 'emmett', 'mountain home', 'twin falls', 'pocatello', 'idaho falls',
+    'lewiston', 'coeur d\'alene', 'post falls', 'hayden', 'sandpoint', 'moscow',
+    'rexburg', 'ammon', 'chubbuck', 'blackfoot', 'jerome', 'burley', 'rupert',
+    'payette', 'ontario', 'weiser', 'fruitland', 'new plymouth', 'emmett',
+    'mccall', 'cascade', 'donnelly', 'tamarack', 'sun valley', 'ketchum',
+    'hailey', 'bellevue', 'carey', 'richfield', 'shoshone', 'gooding',
+    'wendell', 'hagerman', 'buhl', 'filer', 'kimberly', 'hansen', 'paul',
+    'minidoka', 'heyburn', 'declo', 'malta', 'almo', 'sublett', 'rockland',
+    'american falls', 'aberdeen', 'springfield', 'shelley', 'firth', 'basalt',
+    'moreland', 'goshen', 'lava hot springs', 'mccammon', 'inkom', 'chubbuck',
+    'pocatello', 'fort hall', 'blackfoot', 'firth', 'shelley', 'idaho falls',
+    'ammon', 'rigby', 'rexburg', 'sugar city', 'st. anthony', 'ashton',
+    'driggs', 'victor', 'tetonia', 'newdale', 'saint anthony', 'sugar city',
+    'rigby', 'menan', 'lewisville', 'roberts', 'monteview', 'salmon',
+    'challis', 'mackay', 'leadore', 'lemhi', 'tendoy', 'cobalt', 'may',
+    'clayton', 'gibbonsville', 'north fork', 'yellowstone', 'island park',
+    'ashton', 'st. anthony', 'sugar city', 'rexburg', 'rigby', 'menan',
+    'lewisville', 'roberts', 'monteview', 'salmon', 'challis', 'mackay',
+    'leadore', 'lemhi', 'tendoy', 'cobalt', 'may', 'clayton', 'gibbonsville',
+    'north fork', 'yellowstone', 'island park'
+  ];
+  
+  return idahoCities.includes(cityName.toLowerCase());
+}
+
+// Enhanced NPI Registry fetch for clinics/providers (organization endpoint)
+const fetchClinicsFromNPI = async ({ city, state, specialty, limit = 50 }) => {
   try {
+    console.log(`🔍 NPI Registry search: city=${city}, state=${state}, specialty=${specialty}, limit=${limit}`);
+    
     const params = new URLSearchParams();
     if (city) params.set('city', city);
     if (state) params.set('state', state);
     if (specialty) params.set('taxonomy_description', specialty);
-    params.set('limit', String(limit));
+    params.set('limit', String(Math.min(limit, 200))); // NPI Registry max is 200
     // organization=Y to prefer organizations/clinics
     params.set('enumeration_type', 'NPI-2');
 
     const url = `https://npiregistry.cms.hhs.gov/api/?version=2.1&${params.toString()}`;
-    const resp = await axios.get(url, { timeout: 10000 });
+    console.log(`🔍 NPI Registry URL: ${url}`);
+    
+    const resp = await axios.get(url, { timeout: 15000 });
     const results = resp.data?.results || [];
-    return results.map((r) => {
+    
+    console.log(`🔍 NPI Registry returned ${results.length} raw results`);
+    
+    const clinics = results.map((r) => {
       const addr = (r.addresses || []).find(a => a.address_purpose === 'LOCATION') || r.addresses?.[0] || {};
+      const taxonomy = r.taxonomies?.[0];
+      
       return {
-        id: r.number?.toString() || '',
-        name: r.basic?.organization_name || r.basic?.name || 'Clinic',
+        id: `npi-${r.number?.toString() || Math.random().toString(36).substr(2, 9)}`,
+        name: r.basic?.organization_name || r.basic?.name || 'Medical Clinic',
         address: `${addr.address_1 || ''} ${addr.address_2 || ''}, ${addr.city || ''}, ${addr.state || ''} ${addr.postal_code || ''}`.replace(/\s+/g, ' ').trim(),
         phone: addr.telephone_number || '',
-        hours: '',
-        latitude: 0,
+        hours: 'Contact clinic for hours',
+        latitude: 0, // NPI Registry doesn't provide coordinates
         longitude: 0,
-        description: (r.taxonomies?.[0]?.desc) || '',
-        rating: 0,
+        description: taxonomy?.desc || 'Primary care medical services',
+        rating: 4.0, // Default rating for NPI clinics
+        acceptingNewPatients: true, // Assume yes for NPI clinics
+        openNow: true, // Assume yes for NPI clinics
+        offersReferrals: true, // Assume yes for NPI clinics
+        imageUrl: '',
+        website: '',
+        city: addr.city || city || '',
+        state: addr.state || state || '',
+        services: ['Primary Care', 'Medical Services'],
+        specialties: [taxonomy?.desc || 'Family Medicine']
       };
     });
+    
+    console.log(`✅ NPI Registry processed ${clinics.length} clinics`);
+    return clinics;
   } catch (e) {
+    console.error('NPI Registry error:', e.message);
     return [];
   }
 };
@@ -39,10 +90,10 @@ const fetchClinicsFromNPI = async ({ city, state, specialty, limit = 20 }) => {
 const getClinics = async (req, res) => {
   try {
     const {
-      city = 'Boise',
-      state = 'ID',
+      city,
+      state,
       type = 'primary_care',
-      radius = 20,
+      radius = 50, // Increased default radius
       q,
       search, // free-text (e.g., "Boise, ID, USA")
       specialty,
@@ -53,11 +104,18 @@ const getClinics = async (req, res) => {
       lat,
       lng,
       page = 1,
-      limit = 20,
+      limit = 50, // Increased default limit
+      nationwide = false, // New parameter for nationwide search
     } = req.query;
 
     const filter = { type };
-    if (city) filter.city = new RegExp(`^${city}$`, 'i');
+    
+    // Only add city/state filters if not doing nationwide search
+    if (!nationwide) {
+      if (city) filter.city = new RegExp(`^${city}$`, 'i');
+      if (state) filter.state = new RegExp(`^${state}$`, 'i');
+    }
+    
     if (acceptingNew !== undefined) filter.acceptingNewPatients = acceptingNew === 'true';
     if (openNow !== undefined) filter.openNow = openNow === 'true';
     if (open_now !== undefined) filter.openNow = open_now === 'true';
@@ -73,12 +131,14 @@ const getClinics = async (req, res) => {
       .sort({ rating: -1, name: 1 })
       .skip(skip)
       .limit(Number(limit));
+    
+    console.log(`🗄️ Database query returned ${clinics.length} clinics`);
 
     // Try external sources (prioritize Saint Alphonsus scraper)
     const source = (process.env.CLINIC_SOURCE || 'saintalphonsus').toLowerCase();
 
-    // Saint Alphonsus scraper source (primary)
-    if (source === 'saintalphonsus') {
+    // Saint Alphonsus scraper source (primary) - always try this first
+    if (source === 'saintalphonsus' || !clinics.length) {
       try {
         // Parse address-like search to city/state if provided
         // ALWAYS use search parameter if provided (it takes precedence over city/state)
@@ -88,12 +148,28 @@ const getClinics = async (req, res) => {
           console.log(`Parsing search string: "${search}"`);
           const parts = String(search).split(',').map(s => s.trim());
           console.log(`Split parts:`, parts);
-          if (parts.length >= 2) {
+          
+          // Always extract city from first part
+          if (parts.length >= 1) {
             parsedCity = parts[0] || parsedCity;
-            const statePart = parts[1].split(' ')[0];
-            if (statePart && statePart.length <= 3) parsedState = statePart;
-            console.log(`Extracted city: "${parsedCity}", state: "${parsedState}"`);
           }
+          
+          // Extract state from second part if available
+          if (parts.length >= 2) {
+            // Better state extraction - handle "ID, USA" format
+            let statePart = parts[1].trim();
+            // Remove any trailing commas and extra spaces
+            statePart = statePart.replace(/,$/, '').trim();
+            // If it's still multiple words, take the first one
+            if (statePart.includes(' ')) {
+              statePart = statePart.split(' ')[0];
+            }
+            if (statePart && statePart.length <= 3) {
+              parsedState = statePart;
+            }
+          }
+          
+          console.log(`Extracted city: "${parsedCity}", state: "${parsedState}"`);
         }
         
         console.log(`Parsed city: ${parsedCity}, state: ${parsedState}, search: ${search}`);
@@ -106,13 +182,50 @@ const getClinics = async (req, res) => {
         let searchLng = lng;
         
         if (!searchLat || !searchLng) {
-          const coords = getCityCoordinates(parsedCity);
-          if (coords) {
-            searchLat = coords.lat;
-            searchLng = coords.lng;
-            console.log(`Got coordinates for ${parsedCity}: lat=${searchLat}, lng=${searchLng}`);
-          } else {
-            console.log(`No coordinates found for city: ${parsedCity}`);
+          if (parsedCity) {
+            const coords = getCityCoordinates(parsedCity);
+            if (coords) {
+              searchLat = coords.lat;
+              searchLng = coords.lng;
+              console.log(`Got coordinates for ${parsedCity}: lat=${searchLat}, lng=${searchLng}`);
+            } else {
+              console.log(`No coordinates found for city: ${parsedCity} - this is likely not an Idaho city`);
+              // For non-Idaho cities, try NPI Registry as fallback
+              if (parsedCity && !isIdahoCity(parsedCity)) {
+              console.log(`City ${parsedCity} is not in Idaho, trying NPI Registry as fallback`);
+              try {
+                const npiResults = await fetchClinicsFromNPI({
+                  city: parsedCity,
+                  state: parsedState,
+                  specialty: 'Family Medicine',
+                  limit: Number(limit)
+                });
+                
+                if (npiResults.length > 0) {
+                  console.log(`Found ${npiResults.length} clinics from NPI Registry for ${parsedCity}`);
+                  return res.json({
+                    success: true,
+                    data: npiResults,
+                    message: `Found ${npiResults.length} clinics in ${parsedCity} from NPI Registry`,
+                    count: npiResults.length,
+                    source: 'npi_registry',
+                    nationwide: nationwide
+                  });
+                }
+              } catch (npiError) {
+                console.error('NPI Registry fallback failed:', npiError);
+              }
+              
+              // If NPI Registry also fails, return empty results
+              return res.json({
+                success: true,
+                data: [],
+                message: `No clinics found in ${parsedCity}. Saint Alphonsus operates primarily in Idaho.`,
+                count: 0,
+                source: 'saintalphonsus',
+                nationwide: nationwide
+              });
+            }
           }
         }
         
@@ -164,51 +277,60 @@ const getClinics = async (req, res) => {
           }));
           return res.json({ success: true, data: mappedFromSA });
         }
-      } catch (error) {
-        console.error('Saint Alphonsus scraper error:', error);
-        // Fall through to other sources
-      }
-    }
-
-    // If no local data and scraper didn't work, try other sources
-    if (!clinics.length) {
-
-      // Try NPI Registry if configured
-      if (source === 'npi') {
-        const npiResults = await fetchClinicsFromNPI({ city, state, specialty: specialty || q, limit });
-        if (npiResults.length) {
-          return res.json({ success: true, data: npiResults });
+        
+        // If no Saint Alphonsus results, try NPI Registry as fallback
+        if (!filtered.length) {
+          console.log(`🔍 No Saint Alphonsus results, trying NPI Registry for city: ${parsedCity}, state: ${parsedState}`);
+          try {
+        // Try multiple specialties to get more results
+        const specialties = ['Family Medicine', 'Internal Medicine', 'Primary Care', 'General Practice'];
+        let npiResults = [];
+        
+        for (const specialty of specialties) {
+          console.log(`🔍 Trying NPI Registry with specialty: ${specialty}`);
+          const results = await fetchClinicsFromNPI({ 
+            city: city || parsedCity, 
+            state: state || parsedState, 
+            specialty: specialty,
+            limit: Number(limit) 
+          });
+          
+          if (results.length > 0) {
+            npiResults = [...npiResults, ...results];
+            console.log(`✅ NPI Registry returned ${results.length} clinics for ${specialty}`);
+          }
+          
+          // If we have enough results, break
+          if (npiResults.length >= Number(limit)) {
+            break;
+          }
         }
-      }
-
-      // Try Google Places if API key is available
-      if (process.env.GOOGLE_PLACES_API_KEY) {
-        const centerLat = lat ? Number(lat) : 43.6150;
-        const centerLng = lng ? Number(lng) : -116.2023;
-        const meters = Number(radius) * 1000;
-        const keyword = type === 'primary_care' ? 'primary care clinic' : 'clinic';
-
-        const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${centerLat},${centerLng}&radius=${meters}&keyword=${encodeURIComponent(keyword)}&key=${process.env.GOOGLE_PLACES_API_KEY}`;
-        const resp = await axios.get(url);
-        clinics = (resp.data.results || []).map((r) => ({
-          id: r.place_id,
-          name: r.name,
-          address: r.vicinity || '',
-          phone: '',
-          hours: '',
-          latitude: r.geometry?.location?.lat,
-          longitude: r.geometry?.location?.lng,
-          description: r.types?.join(', ') || '',
-          rating: r.rating || 0,
-        }));
-
-        if (clinics.length) {
-          return res.json({ success: true, data: clinics });
+        
+        // Remove duplicates based on name and address
+        const uniqueResults = npiResults.filter((clinic, index, self) => 
+          index === self.findIndex(c => c.name === clinic.name && c.address === clinic.address)
+        );
+        
+        if (uniqueResults.length > 0) {
+          console.log(`✅ NPI Registry returned ${uniqueResults.length} unique clinics`);
+          return res.json({ 
+            success: true, 
+            data: uniqueResults.slice(0, Number(limit)),
+            source: 'npi_registry',
+            message: `Found ${uniqueResults.length} clinics from NPI Registry`
+          });
+        } else {
+          console.log(`❌ NPI Registry returned no results for any specialty`);
         }
-      }
-
-      // Final fallback: return Saint Alphonsus and curated Boise clinics
+          } catch (npiError) {
+            console.error('NPI Registry error:', npiError);
+          }
+        }
+        
+        // Final fallback: return expanded clinic data
+        console.log(`🔄 Using fallback data with ${12} clinics`);
       const fallback = [
+        // Saint Alphonsus locations
         {
           id: 'saint-alphonsus-1',
           name: 'Saint Alphonsus Family Medicine - Boise',
@@ -264,6 +386,43 @@ const getClinics = async (req, res) => {
           state: 'ID'
         },
         {
+          id: 'saint-alphonsus-4',
+          name: 'Saint Alphonsus Regional Medical Center - Nampa',
+          address: '1512 12th Ave Rd, Nampa, ID 83686',
+          phone: '(208) 463-5000',
+          hours: '24/7 Emergency Services',
+          latitude: 43.5407,
+          longitude: -116.5635,
+          description: 'Regional medical center serving Nampa and surrounding areas with comprehensive healthcare services.',
+          rating: 4.4,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: 'https://www.saintalphonsus.org/locations/regional-medical-center-nampa',
+          city: 'Nampa',
+          state: 'ID'
+        },
+        {
+          id: 'saint-alphonsus-5',
+          name: 'Saint Alphonsus Urgent Care - Eagle',
+          address: '1000 E Winding Creek Dr, Eagle, ID 83616',
+          phone: '(208) 302-5200',
+          hours: 'Mon-Sun 8:00 AM - 8:00 PM',
+          latitude: 43.6954,
+          longitude: -116.3540,
+          description: 'Urgent care services for non-emergency medical needs with extended hours.',
+          rating: 4.2,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: 'https://www.saintalphonsus.org/locations/urgent-care-eagle',
+          city: 'Eagle',
+          state: 'ID'
+        },
+        // Additional Boise area clinics
+        {
           id: 'boise-fallback-1',
           name: 'Boise Family Medicine Clinic',
           address: '123 Main St, Boise, ID 83702',
@@ -280,9 +439,122 @@ const getClinics = async (req, res) => {
           website: '',
           city: 'Boise',
           state: 'ID'
+        },
+        {
+          id: 'boise-fallback-2',
+          name: 'Treasure Valley Family Medicine',
+          address: '456 State St, Boise, ID 83705',
+          phone: '(208) 555-0222',
+          hours: 'Mon-Fri 7:00 AM - 6:00 PM',
+          latitude: 43.6189,
+          longitude: -116.2146,
+          description: 'Comprehensive family medicine with same-day appointments and walk-in availability.',
+          rating: 4.4,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: '',
+          city: 'Boise',
+          state: 'ID'
+        },
+        {
+          id: 'boise-fallback-3',
+          name: 'Idaho Primary Care Associates',
+          address: '789 Broadway Ave, Boise, ID 83706',
+          phone: '(208) 555-0333',
+          hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+          latitude: 43.6121,
+          longitude: -116.2089,
+          description: 'Multi-specialty primary care practice with internal medicine and family medicine providers.',
+          rating: 4.5,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: '',
+          city: 'Boise',
+          state: 'ID'
+        },
+        {
+          id: 'meridian-fallback-1',
+          name: 'Meridian Health Center',
+          address: '321 E Franklin Rd, Meridian, ID 83642',
+          phone: '(208) 555-0444',
+          hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+          latitude: 43.6121,
+          longitude: -116.3915,
+          description: 'Community health center serving Meridian with primary care and preventive services.',
+          rating: 4.3,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: '',
+          city: 'Meridian',
+          state: 'ID'
+        },
+        {
+          id: 'nampa-fallback-1',
+          name: 'Nampa Family Practice',
+          address: '654 12th Ave S, Nampa, ID 83651',
+          phone: '(208) 555-0555',
+          hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+          latitude: 43.5788,
+          longitude: -116.5598,
+          description: 'Family practice providing comprehensive primary care services to Nampa residents.',
+          rating: 4.4,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: '',
+          city: 'Nampa',
+          state: 'ID'
+        },
+        {
+          id: 'eagle-fallback-1',
+          name: 'Eagle Medical Group',
+          address: '987 E State St, Eagle, ID 83616',
+          phone: '(208) 555-0666',
+          hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+          latitude: 43.6954,
+          longitude: -116.3540,
+          description: 'Primary care medical group serving Eagle and surrounding communities.',
+          rating: 4.5,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: '',
+          city: 'Eagle',
+          state: 'ID'
+        },
+        {
+          id: 'caldwell-fallback-1',
+          name: 'Caldwell Community Clinic',
+          address: '147 Main St, Caldwell, ID 83605',
+          phone: '(208) 555-0777',
+          hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+          latitude: 43.6629,
+          longitude: -116.6874,
+          description: 'Community-based primary care clinic serving Caldwell and surrounding areas.',
+          rating: 4.2,
+          acceptingNewPatients: true,
+          openNow: true,
+          offersReferrals: true,
+          imageUrl: '',
+          website: '',
+          city: 'Caldwell',
+          state: 'ID'
         }
       ];
       return res.json({ success: true, data: fallback });
+        }
+      } catch (error) {
+        console.error('Saint Alphonsus scraper error:', error);
+        // Fall through to other sources
+      }
     }
 
     const mapped = clinics.map((c) => ({
@@ -567,7 +839,14 @@ const clearCache = async (req, res) => {
 // GET /api/clinics/search - Search clinics by name, phone, or location
 const searchClinics = async (req, res) => {
   try {
-    const { q } = req.query;
+    const { 
+      q, 
+      lat, 
+      lng, 
+      radius = 100, 
+      limit = 50,
+      sortByDistance = true 
+    } = req.query;
     
     if (!q || q.trim().length === 0) {
       return res.status(400).json({
@@ -579,38 +858,78 @@ const searchClinics = async (req, res) => {
     const query = q.trim();
     console.log(`🔍 Searching clinics for: "${query}"`);
 
-    // Search in database first
-    const dbClinics = await Clinic.find({
+    // Build search filter
+    const searchFilter = {
       $or: [
         { name: new RegExp(query, "i") },
         { phone: new RegExp(query, "i") },
         { address: new RegExp(query, "i") },
         { city: new RegExp(query, "i") },
+        { state: new RegExp(query, "i") },
         { description: new RegExp(query, "i") }
       ]
-    }).sort({ rating: -1, name: 1 }).limit(20);
+    };
 
-    // Map database results
-    const mappedDbClinics = dbClinics.map((c) => ({
-      id: String(c._id),
-      name: c.name,
-      address: c.address,
-      phone: c.phone || '',
-      hours: c.hours || '',
-      latitude: c.latitude,
-      longitude: c.longitude,
-      description: c.description || '',
-      rating: c.rating || 0,
-      acceptingNewPatients: c.acceptingNewPatients,
-      openNow: c.openNow,
-      offersReferrals: c.offersReferrals,
-      imageUrl: c.imageUrl || '',
-      city: c.city || '',
-      state: c.state || '',
-      website: '',
-      services: [],
-      specialties: []
-    }));
+    // Add location filter if coordinates provided
+    if (lat && lng) {
+      // For now, we'll get all results and filter by distance in memory
+      // In production, you might want to use MongoDB's geospatial queries
+      console.log(`📍 Location-based search: ${lat}, ${lng}, radius: ${radius}km`);
+    }
+
+    // Search in database
+    let dbClinics = await Clinic.find(searchFilter)
+      .sort({ rating: -1, name: 1 })
+      .limit(Number(limit) * 2); // Get more results to filter by distance
+
+    // Helper function to calculate distance between two coordinates
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      const R = 6371; // Radius of the Earth in kilometers
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    };
+
+    // Map database results with distance calculation
+    const mappedDbClinics = dbClinics.map((c) => {
+      const clinic = {
+        id: String(c._id),
+        name: c.name,
+        address: c.address,
+        phone: c.phone || '',
+        hours: c.hours || '',
+        latitude: c.latitude,
+        longitude: c.longitude,
+        description: c.description || '',
+        rating: c.rating || 0,
+        acceptingNewPatients: c.acceptingNewPatients,
+        openNow: c.openNow,
+        offersReferrals: c.offersReferrals,
+        imageUrl: c.imageUrl || '',
+        city: c.city || '',
+        state: c.state || '',
+        website: '',
+        services: [],
+        specialties: []
+      };
+
+      // Calculate distance if user location provided
+      if (lat && lng && c.latitude && c.longitude) {
+        clinic.distance = calculateDistance(
+          parseFloat(lat), 
+          parseFloat(lng), 
+          c.latitude, 
+          c.longitude
+        );
+      }
+
+      return clinic;
+    });
 
     // Also search in Saint Alphonsus data (fallback clinics)
     const saintAlphonsusClinics = [
@@ -693,6 +1012,126 @@ const searchClinics = async (req, res) => {
         state: 'ID',
         services: ['Primary Care', 'Family Medicine', 'Preventive Care'],
         specialties: ['Family Medicine', 'Internal Medicine', 'Pediatrics']
+      },
+      {
+        id: 'saint-alphonsus-4',
+        name: 'Saint Alphonsus Regional Medical Center - Nampa',
+        address: '1512 12th Ave Rd, Nampa, ID 83686',
+        phone: '(208) 463-5000',
+        hours: '24/7 Emergency Services',
+        latitude: 43.5407,
+        longitude: -116.5635,
+        description: 'Regional medical center serving Nampa and surrounding areas with comprehensive healthcare services.',
+        rating: 4.4,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: 'https://www.saintalphonsus.org/locations/regional-medical-center-nampa',
+        city: 'Nampa',
+        state: 'ID',
+        services: ['Emergency Care', 'Primary Care', 'Specialty Services', 'Surgery', 'Imaging'],
+        specialties: ['Emergency Medicine', 'Cardiology', 'Orthopedics', 'Oncology', 'Neurology']
+      },
+      {
+        id: 'saint-alphonsus-5',
+        name: 'Saint Alphonsus Urgent Care - Eagle',
+        address: '1000 E Winding Creek Dr, Eagle, ID 83616',
+        phone: '(208) 302-5200',
+        hours: 'Mon-Sun 8:00 AM - 8:00 PM',
+        latitude: 43.6954,
+        longitude: -116.3540,
+        description: 'Urgent care services for non-emergency medical needs with extended hours.',
+        rating: 4.2,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: 'https://www.saintalphonsus.org/locations/urgent-care-eagle',
+        city: 'Eagle',
+        state: 'ID',
+        services: ['Urgent Care', 'Primary Care', 'Same-day Appointments'],
+        specialties: ['Family Medicine', 'Urgent Care Medicine']
+      },
+      {
+        id: 'boise-fallback-2',
+        name: 'Treasure Valley Family Medicine',
+        address: '456 State St, Boise, ID 83705',
+        phone: '(208) 555-0222',
+        hours: 'Mon-Fri 7:00 AM - 6:00 PM',
+        latitude: 43.6189,
+        longitude: -116.2146,
+        description: 'Comprehensive family medicine with same-day appointments and walk-in availability.',
+        rating: 4.4,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: '',
+        city: 'Boise',
+        state: 'ID',
+        services: ['Primary Care', 'Family Medicine', 'Same-day Appointments'],
+        specialties: ['Family Medicine', 'Internal Medicine', 'Pediatrics']
+      },
+      {
+        id: 'meridian-fallback-1',
+        name: 'Meridian Health Center',
+        address: '321 E Franklin Rd, Meridian, ID 83642',
+        phone: '(208) 555-0444',
+        hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+        latitude: 43.6121,
+        longitude: -116.3915,
+        description: 'Community health center serving Meridian with primary care and preventive services.',
+        rating: 4.3,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: '',
+        city: 'Meridian',
+        state: 'ID',
+        services: ['Primary Care', 'Community Health', 'Preventive Services'],
+        specialties: ['Family Medicine', 'Community Health']
+      },
+      {
+        id: 'nampa-fallback-1',
+        name: 'Nampa Family Practice',
+        address: '654 12th Ave S, Nampa, ID 83651',
+        phone: '(208) 555-0555',
+        hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+        latitude: 43.5788,
+        longitude: -116.5598,
+        description: 'Family practice providing comprehensive primary care services to Nampa residents.',
+        rating: 4.4,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: '',
+        city: 'Nampa',
+        state: 'ID',
+        services: ['Primary Care', 'Family Practice', 'Preventive Care'],
+        specialties: ['Family Medicine', 'Internal Medicine']
+      },
+      {
+        id: 'eagle-fallback-1',
+        name: 'Eagle Medical Group',
+        address: '987 E State St, Eagle, ID 83616',
+        phone: '(208) 555-0666',
+        hours: 'Mon-Fri 8:00 AM - 5:00 PM',
+        latitude: 43.6954,
+        longitude: -116.3540,
+        description: 'Primary care medical group serving Eagle and surrounding communities.',
+        rating: 4.5,
+        acceptingNewPatients: true,
+        openNow: true,
+        offersReferrals: true,
+        imageUrl: '',
+        website: '',
+        city: 'Eagle',
+        state: 'ID',
+        services: ['Primary Care', 'Medical Group', 'Preventive Care'],
+        specialties: ['Family Medicine', 'Internal Medicine']
       }
     ];
 
@@ -709,20 +1148,42 @@ const searchClinics = async (req, res) => {
     });
 
     // Combine results, prioritizing database results
-    const allResults = [...mappedDbClinics, ...filteredSaintAlphonsus];
+    let allResults = [...mappedDbClinics, ...filteredSaintAlphonsus];
+
+    // Filter by distance if location provided
+    if (lat && lng) {
+      allResults = allResults.filter(clinic => {
+        if (!clinic.distance) return true; // Keep clinics without distance info
+        return clinic.distance <= parseFloat(radius);
+      });
+    }
 
     // Remove duplicates based on name and address
     const uniqueResults = allResults.filter((clinic, index, self) => 
       index === self.findIndex(c => c.name === clinic.name && c.address === clinic.address)
     );
 
-    console.log(`🔍 Found ${uniqueResults.length} clinics matching "${query}"`);
+    // Sort by distance if requested and location provided
+    if (sortByDistance === 'true' && lat && lng) {
+      uniqueResults.sort((a, b) => {
+        const distanceA = a.distance || Infinity;
+        const distanceB = b.distance || Infinity;
+        return distanceA - distanceB;
+      });
+    }
+
+    // Limit results
+    const finalResults = uniqueResults.slice(0, Number(limit));
+
+    console.log(`🔍 Found ${finalResults.length} clinics matching "${query}"`);
 
     res.json({
       success: true,
-      data: uniqueResults,
+      data: finalResults,
       query: query,
-      count: uniqueResults.length
+      count: finalResults.length,
+      location: lat && lng ? { lat: parseFloat(lat), lng: parseFloat(lng) } : null,
+      radius: parseFloat(radius)
     });
 
   } catch (error) {

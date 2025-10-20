@@ -26,16 +26,27 @@ class AuthController {
 
       await user.save();
 
-      // Generate JWT token
-      const token = jwt.sign(
+      // Generate JWT tokens
+      const accessToken = jwt.sign(
         { userId: user._id, role: user.role },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
+      );
+
+      const refreshToken = jwt.sign(
+        { userId: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
       );
 
       res.status(201).json({
         message: 'User registered successfully',
-        token,
+        token: {
+          accessToken,
+          refreshToken,
+          tokenType: 'Bearer',
+          expiresIn: 3600 // 1 hour in seconds
+        },
         user: {
           id: user._id,
           email: user.email,
@@ -77,16 +88,27 @@ class AuthController {
       user.lastLogin = new Date();
       await user.save();
 
-      // Generate JWT token
-      const token = jwt.sign(
+      // Generate JWT tokens
+      const accessToken = jwt.sign(
         { userId: user._id, role: user.role },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
+      );
+
+      const refreshToken = jwt.sign(
+        { userId: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
       );
 
       res.json({
         message: 'Login successful',
-        token,
+        token: {
+          accessToken,
+          refreshToken,
+          tokenType: 'Bearer',
+          expiresIn: 3600 // 1 hour in seconds
+        },
         user: {
           id: user._id,
           email: user.email,
@@ -144,16 +166,48 @@ class AuthController {
   // Refresh JWT token
   static async refreshToken(req, res) {
     try {
-      // Generate new token
-      const token = jwt.sign(
-        { userId: req.user._id, role: req.user.role },
+      const { refreshToken } = req.body;
+
+      if (!refreshToken) {
+        return res.status(400).json({ error: 'Refresh token is required' });
+      }
+
+      // Verify the refresh token
+      let decoded;
+      try {
+        decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      } catch (error) {
+        return res.status(401).json({ error: 'Invalid or expired refresh token' });
+      }
+
+      // Find the user
+      const user = await User.findById(decoded.userId);
+      if (!user) {
+        return res.status(401).json({ error: 'User not found' });
+      }
+
+      // Generate new access token
+      const accessToken = jwt.sign(
+        { userId: user._id, role: user.role },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
+      );
+
+      // Generate new refresh token
+      const newRefreshToken = jwt.sign(
+        { userId: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
       );
 
       res.json({
         message: 'Token refreshed successfully',
-        token
+        token: {
+          accessToken,
+          refreshToken: newRefreshToken,
+          tokenType: 'Bearer',
+          expiresIn: 3600 // 1 hour in seconds
+        }
       });
     } catch (error) {
       console.error('Token refresh error:', error);

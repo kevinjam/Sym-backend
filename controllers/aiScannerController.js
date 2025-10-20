@@ -132,48 +132,60 @@ const scanMedicationOrSupplement = async (req, res) => {
     console.log('🤖 [AI_SCANNER] Processing image:', imagePath);
 
     // Analyze the image using AI
-    const aiResult = await analyzeImageWithAI(imagePath);
-    
-    // Save the scan result to database
-    const scanResult = new AiScanResult({
-      patientId: req.user._id,
-      name: aiResult.name,
-      category: aiResult.category,
-      description: aiResult.description,
-      ingredients: aiResult.ingredients,
-      benefits: aiResult.benefits,
-      sideEffects: aiResult.sideEffects,
-      confidence: aiResult.confidence,
-      imagePath: imagePath,
-      dosage: aiResult.dosage,
-      manufacturer: aiResult.manufacturer,
-      warnings: aiResult.warnings,
-      interactions: aiResult.interactions,
-      scannedAt: new Date()
-    });
+    try {
+      const aiResult = await analyzeImageWithAI(imagePath);
+      
+      // Save the scan result to database
+      const scanResult = new AiScanResult({
+        patientId: req.user._id,
+        name: aiResult.name,
+        category: aiResult.category,
+        description: aiResult.description,
+        ingredients: aiResult.ingredients,
+        benefits: aiResult.benefits,
+        sideEffects: aiResult.sideEffects,
+        confidence: aiResult.confidence,
+        imagePath: imagePath,
+        dosage: aiResult.dosage,
+        manufacturer: aiResult.manufacturer,
+        warnings: aiResult.warnings,
+        interactions: aiResult.interactions,
+        scannedAt: new Date()
+      });
 
-    await scanResult.save();
+      await scanResult.save();
 
-    console.log('🤖 [AI_SCANNER] Scan result saved:', scanResult._id);
+      console.log('🤖 [AI_SCANNER] Scan result saved:', scanResult._id);
 
-    res.json({
-      success: true,
-      data: {
-        id: scanResult._id,
-        name: scanResult.name,
-        category: scanResult.category,
-        description: scanResult.description,
-        ingredients: scanResult.ingredients,
-        benefits: scanResult.benefits,
-        sideEffects: scanResult.sideEffects,
-        confidence: scanResult.confidence,
-        dosage: scanResult.dosage,
-        manufacturer: scanResult.manufacturer,
-        warnings: scanResult.warnings,
-        interactions: scanResult.interactions,
-        scannedAt: scanResult.scannedAt
-      }
-    });
+      res.json({
+        success: true,
+        data: {
+          id: scanResult._id,
+          name: scanResult.name,
+          category: scanResult.category,
+          description: scanResult.description,
+          ingredients: scanResult.ingredients,
+          benefits: scanResult.benefits,
+          sideEffects: scanResult.sideEffects,
+          confidence: scanResult.confidence,
+          dosage: scanResult.dosage,
+          manufacturer: scanResult.manufacturer,
+          warnings: scanResult.warnings,
+          interactions: scanResult.interactions,
+          scannedAt: scanResult.scannedAt
+        }
+      });
+    } catch (aiError) {
+      console.error('🤖 [AI_SCANNER] AI analysis failed:', aiError.message);
+      
+      // Return structured "no results found" response
+      res.json({
+        success: false,
+        message: 'No data found for this scan',
+        data: null,
+        error: 'Unable to analyze the image. Please ensure the image is clear and contains a medication or supplement label.'
+      });
+    }
 
   } catch (error) {
     console.error('🤖 [AI_SCANNER] Error scanning image:', error);
@@ -434,11 +446,10 @@ const analyzeImageWithAI = async (imagePath) => {
     
     console.log('🤖 [AI_SCANNER] Using AI provider:', aiConfig.provider);
 
-    // Try different AI providers in order of preference
+    // Try different AI providers in order of preference (no mock provider)
     const providers = [
       { name: 'openrouter', config: aiConfig.openrouter },
-      { name: 'openai', config: aiConfig.openai },
-      { name: 'mock', config: null }
+      { name: 'openai', config: aiConfig.openai }
     ];
 
     for (const provider of providers) {
@@ -459,8 +470,8 @@ const analyzeImageWithAI = async (imagePath) => {
 
   } catch (error) {
     console.error('🤖 [AI_SCANNER] Error analyzing image:', error);
-    // Return mock data as fallback
-    return generateMockResult();
+    // Do not return mock data - throw error instead
+    throw new Error(`Failed to analyze image: ${error.message}`);
   }
 };
 
@@ -481,9 +492,7 @@ const callAIProvider = async (providerName, config, base64Image, mimeType) => {
         throw new Error('No API key configured for openai');
       }
       return await callOpenAI(config, base64Image, mimeType, prompt);
-    case 'mock':
-      // Mock provider does not require API keys
-      return generateMockResult();
+    // Mock provider removed - only use real AI providers
     default:
       throw new Error(`Unknown provider: ${providerName}`);
   }
@@ -654,14 +663,20 @@ const parseAIResponse = (content) => {
     console.error('🤖 [AI_SCANNER] Error parsing AI response:', error);
   }
 
-  // Fallback to mock data if parsing fails
-  return generateMockResult();
+  // If parsing fails, throw error instead of returning mock data
+  throw new Error('Failed to parse AI response - no valid data found');
 };
 
 /**
- * Generate mock result for testing/fallback
+ * Generate mock result for testing/fallback - DISABLED
+ * Mock data generation has been disabled to ensure only real AI analysis results are returned
  */
 const generateMockResult = () => {
+  // Mock data generation disabled - throw error instead
+  throw new Error('Mock data generation is disabled - only real AI analysis results are allowed');
+  
+  // Mock data array commented out - no longer used
+  /*
   const mockProducts = [
     {
       name: 'Vitamin C 500mg',
@@ -740,8 +755,9 @@ const generateMockResult = () => {
       confidence: 0.88
     }
   ];
+  */
 
-  return mockProducts[Math.floor(Math.random() * mockProducts.length)];
+  // return mockProducts[Math.floor(Math.random() * mockProducts.length)];
 };
 
 /**
