@@ -27,8 +27,8 @@
   "license": "MIT",
   "dependencies": {
     "axios": "^1.12.2",
-    "cheerio": "^1.0.0-rc.12",
     "bcryptjs": "^2.4.3",
+    "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
     "cron": "^4.3.2",
     "dotenv": "^16.3.1",
@@ -41,9 +41,11 @@
     "mongoose": "^7.5.0",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.2",
+    "sharp": "^0.33.5",
     "socket.io": "^4.7.2",
     "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.0"
+    "swagger-ui-express": "^5.0.0",
+    "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
     "jest": "^29.6.2",

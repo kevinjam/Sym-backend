@@ -28,6 +28,16 @@ const aiHealthReportSchema = new mongoose.Schema({
       type: String,
       required: true
     },
+    naturalRemedies: [{
+      condition: {
+        type: String,
+        trim: true
+      },
+      remedy: {
+        type: String,
+        trim: true
+      }
+    }],
     severity: {
       type: String,
       enum: ['low', 'moderate', 'high', 'urgent'],

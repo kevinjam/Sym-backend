@@ -31,6 +31,25 @@ This guide explains how to set up Google authentication for the SYM Medication M
    - Enable "Google" as a sign-in provider
    - Configure OAuth consent screen if prompted
 
+### 2.1. Configure OAuth Consent Screen (App Name)
+
+**Important**: To display "SYM" instead of the project ID in the Google sign-in prompt:
+
+1. Go to [Google Cloud Console OAuth Consent Screen](https://console.cloud.google.com/apis/credentials/consent)
+2. Select your project (e.g., `sym-app-8ec30`)
+3. Update the following:
+   - **App name**: Change to **"SYM"** (currently shows project ID)
+   - **User support email**: Your email address
+   - **App logo** (optional): Upload SYM logo (120x120px recommended)
+   - **Privacy Policy URL** (optional): Your privacy policy link
+   - **Terms of Service URL** (optional): Your terms of service link
+4. Click **"Save and Continue"** through all steps
+5. Wait 5-10 minutes for changes to propagate
+
+**Note**: The app name change will be visible in the Google sign-in prompt after the changes propagate.
+
+For detailed instructions, see [GOOGLE_OAUTH_APP_NAME_SETUP.md](../../GOOGLE_OAUTH_APP_NAME_SETUP.md)
+
 ### 3. Get Firebase Admin SDK Credentials
 
 1. In Firebase Console, go to Project Settings (gear icon)

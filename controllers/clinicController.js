@@ -156,16 +156,41 @@ const getClinics = async (req, res) => {
           
           // Extract state from second part if available
           if (parts.length >= 2) {
-            // Better state extraction - handle "ID, USA" format
+            // Better state extraction - handle "ID, USA" or "California, USA" format
             let statePart = parts[1].trim();
             // Remove any trailing commas and extra spaces
             statePart = statePart.replace(/,$/, '').trim();
-            // If it's still multiple words, take the first one
-            if (statePart.includes(' ')) {
-              statePart = statePart.split(' ')[0];
-            }
-            if (statePart && statePart.length <= 3) {
-              parsedState = statePart;
+            
+            // Handle full state names (e.g., "California", "New York")
+            const stateNameToAbbr = {
+              'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+              'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+              'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+              'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+              'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS', 'missouri': 'MO',
+              'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+              'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH',
+              'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+              'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT',
+              'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY',
+              'district of columbia': 'DC'
+            };
+            
+            const stateLower = statePart.toLowerCase();
+            if (stateNameToAbbr[stateLower]) {
+              parsedState = stateNameToAbbr[stateLower];
+            } else if (statePart.length <= 3) {
+              // Assume it's already an abbreviation
+              parsedState = statePart.toUpperCase();
+            } else {
+              // If it's multiple words, try to match full state name
+              const words = statePart.split(' ');
+              if (words.length > 1) {
+                const fullStateName = words.join(' ').toLowerCase();
+                if (stateNameToAbbr[fullStateName]) {
+                  parsedState = stateNameToAbbr[fullStateName];
+                }
+              }
             }
           }
           
@@ -174,57 +199,93 @@ const getClinics = async (req, res) => {
         
         console.log(`Parsed city: ${parsedCity}, state: ${parsedState}, search: ${search}`);
 
-        // Build search parameters for location-specific scraping
+        // Check if this is an Idaho city first
+        const isIdaho = parsedCity && isIdahoCity(parsedCity);
+        console.log(`City ${parsedCity} is ${isIdaho ? 'in' : 'not in'} Idaho`);
+        
+        // For non-Idaho cities, always try NPI Registry first (before trying Saint Alphonsus)
+        if (parsedCity && !isIdaho) {
+          console.log(`🔍 Non-Idaho city detected: ${parsedCity}, ${parsedState || 'state unknown'}. Trying NPI Registry...`);
+          try {
+            // Try multiple specialties to get more results
+            const specialties = ['Family Medicine', 'Internal Medicine', 'Primary Care', 'General Practice'];
+            let npiResults = [];
+            
+            for (const specialty of specialties) {
+              console.log(`🔍 Trying NPI Registry with specialty: ${specialty} for ${parsedCity}, ${parsedState || 'any state'}`);
+              const results = await fetchClinicsFromNPI({
+                city: parsedCity,
+                state: parsedState, // Use parsed state if available
+                specialty: specialty,
+                limit: Number(limit)
+              });
+              
+              if (results.length > 0) {
+                npiResults = [...npiResults, ...results];
+                console.log(`✅ NPI Registry returned ${results.length} clinics for ${specialty}`);
+              }
+              
+              // If we have enough results, break
+              if (npiResults.length >= Number(limit)) {
+                break;
+              }
+            }
+            
+            // Remove duplicates based on name and address
+            const uniqueResults = npiResults.filter((clinic, index, self) => 
+              index === self.findIndex(c => c.name === clinic.name && c.address === clinic.address)
+            );
+            
+            if (uniqueResults.length > 0) {
+              console.log(`✅ NPI Registry returned ${uniqueResults.length} unique clinics for ${parsedCity}, ${parsedState || 'any state'}`);
+              return res.json({
+                success: true,
+                data: uniqueResults.slice(0, Number(limit)),
+                message: `Found ${uniqueResults.length} clinics in ${parsedCity}${parsedState ? ', ' + parsedState : ''} from NPI Registry`,
+                count: uniqueResults.length,
+                source: 'npi_registry',
+                nationwide: nationwide
+              });
+            } else {
+              console.log(`❌ NPI Registry returned no results for ${parsedCity}, ${parsedState || 'any state'}`);
+              // Return empty results with helpful message
+              return res.json({
+                success: true,
+                data: [],
+                message: `No clinics found in ${parsedCity}${parsedState ? ', ' + parsedState : ''}. Try searching with a different city or state.`,
+                count: 0,
+                source: 'npi_registry',
+                nationwide: nationwide
+              });
+            }
+          } catch (npiError) {
+            console.error('❌ NPI Registry error:', npiError);
+            // Return error response
+            return res.json({
+              success: false,
+              data: [],
+              error: `Failed to search clinics in ${parsedCity}${parsedState ? ', ' + parsedState : ''}. Please try again.`,
+              count: 0,
+              source: 'npi_registry',
+              nationwide: nationwide
+            });
+          }
+        }
+        
+        // Build search parameters for location-specific scraping (for Idaho cities)
         const searchParams = {};
         
-        // Use provided coordinates or get them from city name
+        // Use provided coordinates or get them from city name (for Idaho cities)
         let searchLat = lat;
         let searchLng = lng;
         
         if (!searchLat || !searchLng) {
-          if (parsedCity) {
+          if (parsedCity && isIdaho) {
             const coords = getCityCoordinates(parsedCity);
             if (coords) {
               searchLat = coords.lat;
               searchLng = coords.lng;
               console.log(`Got coordinates for ${parsedCity}: lat=${searchLat}, lng=${searchLng}`);
-            } else {
-              console.log(`No coordinates found for city: ${parsedCity} - this is likely not an Idaho city`);
-              // For non-Idaho cities, try NPI Registry as fallback
-              if (parsedCity && !isIdahoCity(parsedCity)) {
-              console.log(`City ${parsedCity} is not in Idaho, trying NPI Registry as fallback`);
-              try {
-                const npiResults = await fetchClinicsFromNPI({
-                  city: parsedCity,
-                  state: parsedState,
-                  specialty: 'Family Medicine',
-                  limit: Number(limit)
-                });
-                
-                if (npiResults.length > 0) {
-                  console.log(`Found ${npiResults.length} clinics from NPI Registry for ${parsedCity}`);
-                  return res.json({
-                    success: true,
-                    data: npiResults,
-                    message: `Found ${npiResults.length} clinics in ${parsedCity} from NPI Registry`,
-                    count: npiResults.length,
-                    source: 'npi_registry',
-                    nationwide: nationwide
-                  });
-                }
-              } catch (npiError) {
-                console.error('NPI Registry fallback failed:', npiError);
-              }
-              
-              // If NPI Registry also fails, return empty results
-              return res.json({
-                success: true,
-                data: [],
-                message: `No clinics found in ${parsedCity}. Saint Alphonsus operates primarily in Idaho.`,
-                count: 0,
-                source: 'saintalphonsus',
-                nationwide: nationwide
-              });
             }
           }
         }
@@ -278,50 +339,50 @@ const getClinics = async (req, res) => {
           return res.json({ success: true, data: mappedFromSA });
         }
         
-        // If no Saint Alphonsus results, try NPI Registry as fallback
-        if (!filtered.length) {
-          console.log(`🔍 No Saint Alphonsus results, trying NPI Registry for city: ${parsedCity}, state: ${parsedState}`);
+        // If no Saint Alphonsus results (for Idaho cities), try NPI Registry as fallback
+        if (!filtered.length && isIdaho) {
+          console.log(`🔍 No Saint Alphonsus results, trying NPI Registry for Idaho city: ${parsedCity}, state: ${parsedState || 'ID'}`);
           try {
-        // Try multiple specialties to get more results
-        const specialties = ['Family Medicine', 'Internal Medicine', 'Primary Care', 'General Practice'];
-        let npiResults = [];
-        
-        for (const specialty of specialties) {
-          console.log(`🔍 Trying NPI Registry with specialty: ${specialty}`);
-          const results = await fetchClinicsFromNPI({ 
-            city: city || parsedCity, 
-            state: state || parsedState, 
-            specialty: specialty,
-            limit: Number(limit) 
-          });
-          
-          if (results.length > 0) {
-            npiResults = [...npiResults, ...results];
-            console.log(`✅ NPI Registry returned ${results.length} clinics for ${specialty}`);
-          }
-          
-          // If we have enough results, break
-          if (npiResults.length >= Number(limit)) {
-            break;
-          }
-        }
-        
-        // Remove duplicates based on name and address
-        const uniqueResults = npiResults.filter((clinic, index, self) => 
-          index === self.findIndex(c => c.name === clinic.name && c.address === clinic.address)
-        );
-        
-        if (uniqueResults.length > 0) {
-          console.log(`✅ NPI Registry returned ${uniqueResults.length} unique clinics`);
-          return res.json({ 
-            success: true, 
-            data: uniqueResults.slice(0, Number(limit)),
-            source: 'npi_registry',
-            message: `Found ${uniqueResults.length} clinics from NPI Registry`
-          });
-        } else {
-          console.log(`❌ NPI Registry returned no results for any specialty`);
-        }
+            // Try multiple specialties to get more results
+            const specialties = ['Family Medicine', 'Internal Medicine', 'Primary Care', 'General Practice'];
+            let npiResults = [];
+            
+            for (const specialty of specialties) {
+              console.log(`🔍 Trying NPI Registry with specialty: ${specialty}`);
+              const results = await fetchClinicsFromNPI({ 
+                city: city || parsedCity, 
+                state: state || parsedState || 'ID', // Default to ID for Idaho cities
+                specialty: specialty,
+                limit: Number(limit) 
+              });
+              
+              if (results.length > 0) {
+                npiResults = [...npiResults, ...results];
+                console.log(`✅ NPI Registry returned ${results.length} clinics for ${specialty}`);
+              }
+              
+              // If we have enough results, break
+              if (npiResults.length >= Number(limit)) {
+                break;
+              }
+            }
+            
+            // Remove duplicates based on name and address
+            const uniqueResults = npiResults.filter((clinic, index, self) => 
+              index === self.findIndex(c => c.name === clinic.name && c.address === clinic.address)
+            );
+            
+            if (uniqueResults.length > 0) {
+              console.log(`✅ NPI Registry returned ${uniqueResults.length} unique clinics`);
+              return res.json({ 
+                success: true, 
+                data: uniqueResults.slice(0, Number(limit)),
+                source: 'npi_registry',
+                message: `Found ${uniqueResults.length} clinics from NPI Registry`
+              });
+            } else {
+              console.log(`❌ NPI Registry returned no results for any specialty`);
+            }
           } catch (npiError) {
             console.error('NPI Registry error:', npiError);
           }
@@ -550,7 +611,6 @@ const getClinics = async (req, res) => {
         }
       ];
       return res.json({ success: true, data: fallback });
-        }
       } catch (error) {
         console.error('Saint Alphonsus scraper error:', error);
         // Fall through to other sources

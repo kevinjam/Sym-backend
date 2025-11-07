@@ -38,7 +38,7 @@ const analyzeHealthReport = async (req, res) => {
     }
 
     // Prepare AI prompt
-    const aiPrompt = `You are an AI medical assistant. A patient has described their symptoms. Analyze the text, extract key symptoms, group related issues, and suggest possible causes. 
+    const aiPrompt = `You are an AI medical assistant focused on holistic and natural health suggestions. A patient has described their symptoms. Analyze the text, extract key symptoms, group related issues, suggest possible causes, and provide natural remedies.
 
 Patient symptom report: "${report}"
 
@@ -48,6 +48,12 @@ Please provide a structured analysis in the following JSON format:
   "organizedSymptoms": ["List of specific symptoms mentioned"],
   "possibleCauses": ["Possible underlying causes or conditions"],
   "recommendations": "Recommendations for the doctor to review",
+  "naturalRemedies": [
+    {
+      "condition": "Condition or symptom identifier (e.g., '1a. Respiratory inflammation', '2b. Mild dehydration')",
+      "remedy": "Natural, organic, or lifestyle-based remedy (e.g., 'Organic eucalyptus or peppermint essential oil (supports respiratory health)', 'Drink at least 2.5L of water daily, include hydrating fruits (watermelon, cucumber)')"
+    }
+  ],
   "severity": "low|moderate|high|urgent",
   "confidence": 85
 }
@@ -59,6 +65,12 @@ Important guidelines:
 - Be objective and factual
 - Severity should be based on symptom urgency
 - Confidence should be 0-100 based on clarity of symptoms described
+- Natural remedies must be:
+  * Natural, organic, or lifestyle-based
+  * Short, clear, and safe
+  * Corresponding to the conditions/symptoms identified
+  * Examples: essential oils, dietary changes, hydration, sunlight exposure, herbal teas, breathing exercises, etc.
+- Number remedies to match condition identifiers (e.g., "1a." condition should have "1a." remedy)
 
 Respond only with valid JSON, no additional text.`;
 
@@ -193,6 +205,15 @@ Respond only with valid JSON, no additional text.`;
         ? aiAnalysis.possibleCauses.filter(c => c && c.trim().length > 0)
         : ['Further evaluation needed'],
       recommendations: aiAnalysis.recommendations || 'Doctor evaluation recommended',
+      naturalRemedies: Array.isArray(aiAnalysis.naturalRemedies)
+        ? aiAnalysis.naturalRemedies
+            .filter(r => r && (r.condition || r.remedy))
+            .map(r => ({
+              condition: (r.condition || '').trim(),
+              remedy: (r.remedy || '').trim()
+            }))
+            .filter(r => r.condition.length > 0 && r.remedy.length > 0)
+        : [],
       severity: ['low', 'moderate', 'high', 'urgent'].includes(aiAnalysis.severity) 
         ? aiAnalysis.severity 
         : 'moderate',
@@ -435,11 +456,17 @@ const createMockHealthReport = async (userId, report, res) => {
     };
 
     // Simple keyword-based analysis for testing
+    mockAnalysis.naturalRemedies = [];
+    
     if (reportLower.includes('fever') || reportLower.includes('temperature')) {
       mockAnalysis.organizedSymptoms.push('Fever');
       mockAnalysis.possibleCauses.push('Viral infection', 'Bacterial infection');
       mockAnalysis.severity = 'moderate';
       mockAnalysis.confidence = 75;
+      mockAnalysis.naturalRemedies.push({
+        condition: '1a. Fever',
+        remedy: 'Stay hydrated with water and herbal teas (chamomile, ginger). Rest in a cool environment. Apply cool compresses to forehead.'
+      });
     }
     
     if (reportLower.includes('cough') || reportLower.includes('coughing')) {
@@ -447,6 +474,10 @@ const createMockHealthReport = async (userId, report, res) => {
       mockAnalysis.possibleCauses.push('Respiratory infection', 'Allergies');
       mockAnalysis.severity = 'moderate';
       mockAnalysis.confidence = 70;
+      mockAnalysis.naturalRemedies.push({
+        condition: '2b. Respiratory inflammation',
+        remedy: 'Organic eucalyptus or peppermint essential oil (supports respiratory health). Steam inhalation with warm water. Honey and lemon tea.'
+      });
     }
     
     if (reportLower.includes('headache') || reportLower.includes('head pain')) {
@@ -454,6 +485,10 @@ const createMockHealthReport = async (userId, report, res) => {
       mockAnalysis.possibleCauses.push('Tension headache', 'Migraine', 'Stress');
       mockAnalysis.severity = 'low';
       mockAnalysis.confidence = 65;
+      mockAnalysis.naturalRemedies.push({
+        condition: '3c. Headache',
+        remedy: 'Apply cold or warm compress to forehead. Peppermint or lavender essential oil on temples. Stay hydrated and ensure adequate rest.'
+      });
     }
     
     if (reportLower.includes('pain') || reportLower.includes('ache')) {
@@ -461,6 +496,24 @@ const createMockHealthReport = async (userId, report, res) => {
       mockAnalysis.possibleCauses.push('Inflammation', 'Muscle strain');
       mockAnalysis.severity = 'low';
       mockAnalysis.confidence = 60;
+      mockAnalysis.naturalRemedies.push({
+        condition: '4d. General pain',
+        remedy: 'Gentle stretching and movement. Turmeric or ginger tea (anti-inflammatory). Warm compress or Epsom salt bath.'
+      });
+    }
+    
+    if (reportLower.includes('dehydration') || reportLower.includes('thirsty') || reportLower.includes('dry')) {
+      mockAnalysis.naturalRemedies.push({
+        condition: '5e. Mild dehydration',
+        remedy: 'Drink at least 2.5L of water daily, include hydrating fruits (watermelon, cucumber). Coconut water for electrolytes.'
+      });
+    }
+    
+    if (reportLower.includes('vitamin') || reportLower.includes('deficiency') || reportLower.includes('d')) {
+      mockAnalysis.naturalRemedies.push({
+        condition: '6f. Vitamin D deficiency',
+        remedy: 'Morning sunlight exposure (15–20 mins) or vitamin D-fortified foods. Include fatty fish, egg yolks, and mushrooms in diet.'
+      });
     }
 
     if (reportLower.includes('severe') || reportLower.includes('intense') || reportLower.includes('unbearable')) {
