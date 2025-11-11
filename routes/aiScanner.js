@@ -6,7 +6,7 @@ const {
   getScanResult, 
   deleteScanResult, 
   testAIScanner,
-  upload 
+  uploadScanImages
 } = require('../controllers/aiScannerController');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -133,14 +133,18 @@ router.use(authenticateToken);
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required:
- *               - image
  *             properties:
+ *               images:
+ *                 type: array
+ *                 description: Front and back images of the product (up to 2 files, JPEG, PNG, GIF, WebP, 10MB each)
+ *                 maxItems: 2
+ *                 items:
+ *                   type: string
+ *                   format: binary
  *               image:
  *                 type: string
  *                 format: binary
- *                 description: Image file of medication or supplement (JPEG, PNG, GIF, WebP)
- *                 maxSize: 10MB
+ *                 description: Single image upload (legacy support; use images[] for best results)
  *     responses:
  *       200:
  *         description: Successfully analyzed medication/supplement
@@ -186,7 +190,7 @@ router.use(authenticateToken);
  *                       type: string
  *                       example: "Failed to process image"
  */
-router.post('/scan', upload.single('image'), scanMedicationOrSupplement);
+router.post('/scan', uploadScanImages, scanMedicationOrSupplement);
 
 /**
  * @swagger

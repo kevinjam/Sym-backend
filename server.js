@@ -44,7 +44,7 @@ const io = socketIo(server, {
 
 // Trust proxy - Required when behind reverse proxy (Render, Heroku, etc.)
 // This allows Express to correctly identify client IPs from X-Forwarded-For headers
-app.set('trust proxy', true);
+// app.set('trust proxy', true);
 
 // Middleware
 app.use(helmet());

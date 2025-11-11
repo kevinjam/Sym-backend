@@ -310,16 +310,27 @@ class AuthController {
         
         await user.save();
 
-        // Generate JWT token
-        const token = jwt.sign(
+        // Generate JWT tokens
+        const accessToken = jwt.sign(
           { userId: user._id, role: user.role },
           process.env.JWT_SECRET,
-          { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+          { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
+        );
+
+        const refreshToken = jwt.sign(
+          { userId: user._id, role: user.role },
+          process.env.JWT_SECRET,
+          { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
         );
 
         return res.json({
           message: 'Google login successful',
-          token,
+          token: {
+            accessToken,
+            refreshToken,
+            tokenType: 'Bearer',
+            expiresIn: 3600
+          },
           user: {
             id: user._id,
             email: user.email,
@@ -351,16 +362,27 @@ class AuthController {
 
       await user.save();
 
-      // Generate JWT token
-      const token = jwt.sign(
+      // Generate JWT tokens
+      const accessToken = jwt.sign(
         { userId: user._id, role: user.role },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
+      );
+
+      const refreshToken = jwt.sign(
+        { userId: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
       );
 
       res.status(201).json({
         message: 'Google signup successful',
-        token,
+        token: {
+          accessToken,
+          refreshToken,
+          tokenType: 'Bearer',
+          expiresIn: 3600
+        },
         user: {
           id: user._id,
           email: user.email,

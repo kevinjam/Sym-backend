@@ -4,6 +4,69 @@ const fs = require('fs');
 const axios = require('axios');
 const AiScanResult = require('../models/AiScanResult');
 
+const MAX_UPLOAD_IMAGES = 2;
+const SUPPORTED_IMAGE_FIELDS = new Set([
+  'image',
+  'images',
+  'frontImage',
+  'backImage',
+  'additionalImage'
+]);
+
+const deleteFileIfExists = (filePath) => {
+  if (!filePath) return;
+  fs.unlink(filePath, (err) => {
+    if (err && err.code !== 'ENOENT') {
+      console.error('Error deleting file:', err);
+    }
+  });
+};
+
+const extractUploadedImages = (req) => {
+  const collected = [];
+  const seenPaths = new Set();
+
+  const pushFile = (file) => {
+    if (!file) return;
+    if (SUPPORTED_IMAGE_FIELDS.size && file.fieldname && !SUPPORTED_IMAGE_FIELDS.has(file.fieldname)) {
+      return;
+    }
+    if (file.path && seenPaths.has(file.path)) return;
+    if (file.path) seenPaths.add(file.path);
+    collected.push(file);
+  };
+
+  if (req.file) {
+    pushFile(req.file);
+  }
+
+  if (Array.isArray(req.files)) {
+    req.files.forEach(pushFile);
+  } else if (req.files && typeof req.files === 'object') {
+    // Prioritize known field ordering to keep front/back context consistent
+    Array.from(SUPPORTED_IMAGE_FIELDS).forEach((field) => {
+      const value = req.files[field];
+      if (Array.isArray(value)) {
+        value.forEach(pushFile);
+      } else {
+        pushFile(value);
+      }
+    });
+
+    // Include any remaining file fields that might still be relevant
+    Object.entries(req.files).forEach(([field, value]) => {
+      if (SUPPORTED_IMAGE_FIELDS.has(field)) return;
+      if (Array.isArray(value)) {
+        value.forEach(pushFile);
+      } else {
+        pushFile(value);
+      }
+    });
+  }
+
+  return collected;
+};
+
 // Configure multer for image uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -36,6 +99,14 @@ const upload = multer({
     }
   }
 });
+
+const uploadScanImages = upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'images', maxCount: MAX_UPLOAD_IMAGES },
+  { name: 'frontImage', maxCount: 1 },
+  { name: 'backImage', maxCount: 1 },
+  { name: 'additionalImage', maxCount: 1 }
+]);
 
 /**
  * @swagger
@@ -120,82 +191,104 @@ const upload = multer({
  *         description: Internal server error
  */
 const scanMedicationOrSupplement = async (req, res) => {
+  let imageFiles = [];
+  let imagePaths = [];
+
   try {
-    if (!req.file) {
+    const uploadedFiles = extractUploadedImages(req);
+
+    if (!uploadedFiles.length) {
       return res.status(400).json({
         success: false,
         error: 'No image file provided'
       });
     }
 
-    const imagePath = req.file.path;
-    console.log('🤖 [AI_SCANNER] Processing image:', imagePath);
+    if (uploadedFiles.length > MAX_UPLOAD_IMAGES) {
+      const discarded = uploadedFiles.slice(MAX_UPLOAD_IMAGES);
+      discarded.forEach((file) => deleteFileIfExists(file.path));
+    }
 
-    // Analyze the image using AI
+    imageFiles = uploadedFiles.slice(0, MAX_UPLOAD_IMAGES);
+    imagePaths = imageFiles.map((file) => file.path);
+
+    console.log('🤖 [AI_SCANNER] Processing images:', imagePaths);
+
+    const analysisStart = Date.now();
+
+    let aiResult;
     try {
-      const aiResult = await analyzeImageWithAI(imagePath);
-      
-      // Save the scan result to database
-      const scanResult = new AiScanResult({
-        patientId: req.user._id,
-        name: aiResult.name,
-        category: aiResult.category,
-        description: aiResult.description,
-        ingredients: aiResult.ingredients,
-        benefits: aiResult.benefits,
-        sideEffects: aiResult.sideEffects,
-        confidence: aiResult.confidence,
-        imagePath: imagePath,
-        dosage: aiResult.dosage,
-        manufacturer: aiResult.manufacturer,
-        warnings: aiResult.warnings,
-        interactions: aiResult.interactions,
-        scannedAt: new Date()
-      });
-
-      await scanResult.save();
-
-      console.log('🤖 [AI_SCANNER] Scan result saved:', scanResult._id);
-
-      res.json({
-        success: true,
-        data: {
-          id: scanResult._id,
-          name: scanResult.name,
-          category: scanResult.category,
-          description: scanResult.description,
-          ingredients: scanResult.ingredients,
-          benefits: scanResult.benefits,
-          sideEffects: scanResult.sideEffects,
-          confidence: scanResult.confidence,
-          dosage: scanResult.dosage,
-          manufacturer: scanResult.manufacturer,
-          warnings: scanResult.warnings,
-          interactions: scanResult.interactions,
-          scannedAt: scanResult.scannedAt
-        }
-      });
+      aiResult = await analyzeImageWithAI(imagePaths);
     } catch (aiError) {
       console.error('🤖 [AI_SCANNER] AI analysis failed:', aiError.message);
-      
-      // Return structured "no results found" response
-      res.json({
+      imagePaths.forEach(deleteFileIfExists);
+
+      return res.json({
         success: false,
         message: 'No data found for this scan',
         data: null,
-        error: 'Unable to analyze the image. Please ensure the image is clear and contains a medication or supplement label.'
+        error: 'Unable to analyze the image(s). Please ensure the images are clear and include the product name and ingredient details.'
       });
     }
 
+    const processingTime = Date.now() - analysisStart;
+
+    // Save the scan result to database
+    const scanResult = new AiScanResult({
+      patientId: req.user._id,
+      name: aiResult.name,
+      category: aiResult.category,
+      description: aiResult.description,
+      ingredients: aiResult.ingredients,
+      benefits: aiResult.benefits,
+      sideEffects: aiResult.sideEffects,
+      confidence: aiResult.confidence,
+      imagePath: imagePaths[0],
+      imagePaths,
+      dosage: aiResult.dosage,
+      manufacturer: aiResult.manufacturer,
+      warnings: aiResult.warnings,
+      interactions: aiResult.interactions,
+      scannedAt: new Date(),
+      aiProvider: aiResult.provider,
+      aiModel: aiResult.model,
+      processingTime
+    });
+
+    await scanResult.save();
+
+    console.log('🤖 [AI_SCANNER] Scan result saved:', scanResult._id);
+
+    res.json({
+      success: true,
+      data: {
+        id: scanResult._id,
+        name: scanResult.name,
+        category: scanResult.category,
+        description: scanResult.description,
+        ingredients: scanResult.ingredients,
+        benefits: scanResult.benefits,
+        sideEffects: scanResult.sideEffects,
+        confidence: scanResult.confidence,
+        dosage: scanResult.dosage,
+        manufacturer: scanResult.manufacturer,
+        warnings: scanResult.warnings,
+        interactions: scanResult.interactions,
+        scannedAt: scanResult.scannedAt
+      },
+      meta: {
+        imagesAnalyzed: imagePaths.length,
+        aiProvider: scanResult.aiProvider,
+        aiModel: scanResult.aiModel,
+        processingTime
+      }
+    });
+
   } catch (error) {
-    console.error('🤖 [AI_SCANNER] Error scanning image:', error);
+    console.error('🤖 [AI_SCANNER] Error scanning images:', error);
     
-    // Clean up file on error
-    if (req.file && req.file.path) {
-      fs.unlink(req.file.path, (err) => {
-        if (err) console.error('Error deleting file on error:', err);
-      });
-    }
+    // Clean up files on error
+    imagePaths.forEach(deleteFileIfExists);
 
     res.status(500).json({
       success: false,
@@ -407,12 +500,24 @@ const deleteScanResult = async (req, res) => {
       });
     }
 
-    // Delete the image file
-    if (scanResult.imagePath && fs.existsSync(scanResult.imagePath)) {
-      fs.unlink(scanResult.imagePath, (err) => {
-        if (err) console.error('Error deleting image file:', err);
+    // Delete the image files
+    const deletePaths = new Set();
+    if (scanResult.imagePath) {
+      deletePaths.add(scanResult.imagePath);
+    }
+    if (Array.isArray(scanResult.imagePaths)) {
+      scanResult.imagePaths.forEach((filePath) => {
+        if (filePath) deletePaths.add(filePath);
       });
     }
+
+    deletePaths.forEach((filePath) => {
+      if (fs.existsSync(filePath)) {
+        fs.unlink(filePath, (err) => {
+          if (err) console.error('Error deleting image file:', err);
+        });
+      }
+    });
 
     await AiScanResult.findByIdAndDelete(id);
 
@@ -434,12 +539,24 @@ const deleteScanResult = async (req, res) => {
  * Analyze image using AI service
  * This function handles the AI integration and can be easily modified
  */
-const analyzeImageWithAI = async (imagePath) => {
+const analyzeImageWithAI = async (imagePaths = []) => {
   try {
-    // Read image file and convert to base64
-    const imageBuffer = fs.readFileSync(imagePath);
-    const base64Image = imageBuffer.toString('base64');
-    const mimeType = getMimeType(imagePath);
+    if (!Array.isArray(imagePaths) || imagePaths.length === 0) {
+      throw new Error('No images provided for analysis');
+    }
+
+    // Read image files and convert to base64
+    const images = imagePaths.map((imagePath, index) => {
+      const imageBuffer = fs.readFileSync(imagePath);
+      const base64Image = imageBuffer.toString('base64');
+      const mimeType = getMimeType(imagePath);
+      return {
+        path: imagePath,
+        base64: base64Image,
+        mimeType,
+        index
+      };
+    });
 
     // Get AI configuration from environment
     const aiConfig = getAIConfiguration();
@@ -452,10 +569,12 @@ const analyzeImageWithAI = async (imagePath) => {
       { name: 'openai', config: aiConfig.openai }
     ];
 
+    const prompt = getAnalysisPrompt(images.length);
+
     for (const provider of providers) {
       try {
         console.log(`🤖 [AI_SCANNER] Trying provider: ${provider.name}`);
-        const result = await callAIProvider(provider.name, provider.config, base64Image, mimeType);
+        const result = await callAIProvider(provider.name, provider.config, images, prompt);
         if (result) {
           console.log(`🤖 [AI_SCANNER] Success with provider: ${provider.name}`);
           return result;
@@ -478,20 +597,18 @@ const analyzeImageWithAI = async (imagePath) => {
 /**
  * Call specific AI provider
  */
-const callAIProvider = async (providerName, config, base64Image, mimeType) => {
-  const prompt = getAnalysisPrompt();
-
+const callAIProvider = async (providerName, config, images, prompt) => {
   switch (providerName) {
     case 'openrouter':
       if (!config || !config.apiKey) {
         throw new Error('No API key configured for openrouter');
       }
-      return await callOpenRouter(config, base64Image, mimeType, prompt);
+      return await callOpenRouter(config, images, prompt);
     case 'openai':
       if (!config || !config.apiKey) {
         throw new Error('No API key configured for openai');
       }
-      return await callOpenAI(config, base64Image, mimeType, prompt);
+      return await callOpenAI(config, images, prompt);
     // Mock provider removed - only use real AI providers
     default:
       throw new Error(`Unknown provider: ${providerName}`);
@@ -501,7 +618,7 @@ const callAIProvider = async (providerName, config, base64Image, mimeType) => {
 /**
  * Call OpenRouter API
  */
-const callOpenRouter = async (config, base64Image, mimeType, prompt) => {
+const callOpenRouter = async (config, images, prompt) => {
   // Prefer Gemini vision-capable models
   const models = [
     'google/gemini-2.0-flash-exp:free',
@@ -510,7 +627,29 @@ const callOpenRouter = async (config, base64Image, mimeType, prompt) => {
 
   // Try multiple payload formats for compatibility
   const buildPayloads = (model) => {
-    const dataUrl = `data:${mimeType};base64,${base64Image}`;
+    const dataUrls = images.map(({ base64, mimeType }) => `data:${mimeType};base64,${base64}`);
+    const structuredContent = [
+      { type: 'input_text', text: prompt },
+      ...dataUrls.flatMap((dataUrl, index) => ([
+        {
+          type: 'input_text',
+          text: `Image ${index + 1}${index === 0 ? ' (front label / product name)' : ' (back label / ingredients and warnings)'}`
+        },
+        { type: 'input_image', image_url: dataUrl }
+      ]))
+    ];
+
+    const fallbackContent = [
+      { type: 'text', text: prompt },
+      ...dataUrls.flatMap((dataUrl, index) => ([
+        {
+          type: 'text',
+          text: `Image ${index + 1}${index === 0 ? ' (front label / product name)' : ' (back label / ingredients and warnings)'}`
+        },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]))
+    ];
+
     return [
       // Gemini-style structured content
       {
@@ -518,10 +657,7 @@ const callOpenRouter = async (config, base64Image, mimeType, prompt) => {
         messages: [
           {
             role: 'user',
-            content: [
-              { type: 'input_text', text: prompt },
-              { type: 'input_image', image_url: dataUrl }
-            ]
+            content: structuredContent
           }
         ],
         max_tokens: 2000,
@@ -533,10 +669,7 @@ const callOpenRouter = async (config, base64Image, mimeType, prompt) => {
         messages: [
           {
             role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              { type: 'image_url', image_url: { url: dataUrl } }
-            ]
+            content: fallbackContent
           }
         ],
         max_tokens: 2000,
@@ -563,7 +696,12 @@ const callOpenRouter = async (config, base64Image, mimeType, prompt) => {
         if (response.data?.choices?.length) {
           const content = response.data.choices[0].message?.content;
           const normalized = normalizeOpenRouterContent(content);
-          return parseAIResponse(normalized);
+          const analysis = parseAIResponse(normalized);
+          return {
+            ...analysis,
+            provider: 'openrouter',
+            model
+          };
         }
       } catch (error) {
         console.log(`🤖 [AI_SCANNER] OpenRouter attempt failed (model=${model}):`, error.response?.status, error.message);
@@ -600,7 +738,7 @@ const normalizeOpenRouterContent = (content) => {
 /**
  * Call OpenAI API
  */
-const callOpenAI = async (config, base64Image, mimeType, prompt) => {
+const callOpenAI = async (config, images, prompt) => {
   const response = await axios.post('https://api.openai.com/v1/chat/completions', {
     model: 'gpt-4-vision-preview',
     messages: [
@@ -608,12 +746,18 @@ const callOpenAI = async (config, base64Image, mimeType, prompt) => {
         role: 'user',
         content: [
           { type: 'text', text: prompt },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${mimeType};base64,${base64Image}`
+          ...images.flatMap(({ base64, mimeType }, index) => ([
+            {
+              type: 'text',
+              text: `Image ${index + 1}${index === 0 ? ' (front label / product name)' : ' (back label / ingredients and warnings)'}`
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${mimeType};base64,${base64}`
+              }
             }
-          }
+          ]))
         ]
       }
     ],
@@ -629,7 +773,12 @@ const callOpenAI = async (config, base64Image, mimeType, prompt) => {
 
   if (response.data.choices && response.data.choices[0]) {
     const content = response.data.choices[0].message.content;
-    return parseAIResponse(content);
+    const analysis = parseAIResponse(content);
+    return {
+      ...analysis,
+      provider: 'openai',
+      model: 'gpt-4-vision-preview'
+    };
   }
 
   throw new Error('OpenAI API failed');
@@ -644,19 +793,59 @@ const parseAIResponse = (content) => {
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const aiData = JSON.parse(jsonMatch[0]);
+      const sanitizeString = (value) => {
+        if (typeof value === 'string') return value.trim();
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        if (typeof value === 'object' && value !== null) {
+          const textValue = value.text || value.value || value.description;
+          if (textValue) return String(textValue).trim();
+        }
+        return '';
+      };
+
+      const sanitizeStringList = (value) => {
+        if (!value) return [];
+        const arrayValue = Array.isArray(value) ? value : [value];
+        return arrayValue
+          .map((item) => sanitizeString(item))
+          .map((item) => item.replace(/^[•\-\u2022]\s*/, '').trim())
+          .filter((item) => item.length > 0);
+      };
+
+      const sanitizeIngredientList = (value) => {
+        if (!value) return [];
+        if (!Array.isArray(value)) return [];
+        return value
+          .map((item) => ({
+            name: sanitizeString(item?.name),
+            amount: sanitizeString(item?.amount),
+            unit: sanitizeString(item?.unit) || undefined,
+            purpose: sanitizeString(item?.purpose) || undefined
+          }))
+          .filter((item) => item.name);
+      };
+
+      const clampConfidence = (confidence) => {
+        const numeric = typeof confidence === 'number'
+          ? confidence
+          : parseFloat(confidence);
+        if (Number.isNaN(numeric)) return 0.5;
+        return Math.min(1, Math.max(0, numeric));
+      };
       
       return {
-        name: aiData.name || 'Unknown Product',
-        category: aiData.category || 'supplement',
-        description: aiData.description || 'No description available',
-        ingredients: aiData.ingredients || [],
-        benefits: aiData.benefits || [],
-        sideEffects: aiData.sideEffects || [],
-        confidence: aiData.confidence || 0.5,
-        dosage: aiData.dosage || null,
-        manufacturer: aiData.manufacturer || null,
-        warnings: aiData.warnings || null,
-        interactions: aiData.interactions || null
+        name: sanitizeString(aiData.name) || 'Unknown Product',
+        category: sanitizeString(aiData.category) || 'supplement',
+        description: sanitizeString(aiData.description) || 'No description available',
+        ingredients: sanitizeIngredientList(aiData.ingredients),
+        benefits: sanitizeStringList(aiData.benefits),
+        sideEffects: sanitizeStringList(aiData.sideEffects),
+        confidence: clampConfidence(aiData.confidence),
+        dosage: sanitizeString(aiData.dosage) || null,
+        manufacturer: sanitizeString(aiData.manufacturer) || null,
+        warnings: sanitizeString(aiData.warnings) || null,
+        interactions: sanitizeString(aiData.interactions) || null
       };
     }
   } catch (error) {
@@ -778,8 +967,12 @@ const getAIConfiguration = () => {
 /**
  * Get analysis prompt for AI
  */
-const getAnalysisPrompt = () => {
-  return `Analyze this image of a medication or supplement and provide detailed information in the following JSON format:
+const getAnalysisPrompt = (imageCount = 1) => {
+  const imageContext = imageCount > 1
+    ? `You are provided with ${imageCount} images of the same product. The first image typically shows the product name/logo (front label) and the second image often contains the ingredient list, supplement facts, dosage details, or warnings (back label). Combine information from all images before answering.`
+    : 'You are provided with a single image of the product. Extract as much information as possible from it.';
+
+  return `Analyze ${imageCount > 1 ? 'these images' : 'this image'} of a medication or supplement and provide detailed information in the following JSON format. ${imageContext}
 
 {
   "name": "Product name",
@@ -810,7 +1003,7 @@ Focus on:
 - Any warnings or interactions
 - Confidence level (0.0 to 1.0) based on image clarity and text readability
 
-If you cannot clearly identify the product, set confidence to a lower value and provide the best possible analysis.`;
+If you cannot clearly identify the product, set confidence to a lower value and explain what is missing. Ensure arrays contain concise bullet-style strings.`;
 };
 
 /**
@@ -886,6 +1079,6 @@ module.exports = {
   getScanResult,
   deleteScanResult,
   testAIScanner,
-  upload
+  uploadScanImages
 };
 

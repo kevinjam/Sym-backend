@@ -70,6 +70,10 @@ const aiScanResultSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  imagePaths: {
+    type: [String],
+    default: []
+  },
   dosage: {
     type: String,
     trim: true,
@@ -155,6 +159,9 @@ aiScanResultSchema.pre('save', function(next) {
   if (!this.ingredients) this.ingredients = [];
   if (!this.benefits) this.benefits = [];
   if (!this.sideEffects) this.sideEffects = [];
+  if (!this.imagePaths || this.imagePaths.length === 0) {
+    this.imagePaths = this.imagePath ? [this.imagePath] : [];
+  }
   
   // Trim string fields
   if (this.name) this.name = this.name.trim();
