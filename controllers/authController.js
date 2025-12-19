@@ -266,42 +266,130 @@ class AuthController {
     }
   }
 
-  // Google authentication
+  // Google authentication (also handles Apple)
   static async googleAuth(req, res) {
+    let provider = 'google'; // Default, will be determined from token
     try {
       const { idToken, role } = req.body;
 
       if (!idToken) {
-        return res.status(400).json({ error: 'Google ID token is required' });
+        return res.status(400).json({ error: 'ID token is required' });
       }
 
       if (!role || !['patient', 'doctor'].includes(role)) {
         return res.status(400).json({ error: 'Valid role (patient or doctor) is required' });
       }
 
-      // Verify the Google ID token
+      // Verify the Firebase ID token (works for both Google and Apple)
       const decodedToken = await admin.auth().verifyIdToken(idToken);
       
-      if (!decodedToken.email_verified) {
+      // Determine provider from Firebase token
+      provider = decodedToken.firebase?.sign_in_provider === 'apple.com' ? 'apple' : 'google';
+      
+      // Apple may not always provide email_verified, so only check for Google
+      if (provider === 'google' && !decodedToken.email_verified) {
         return res.status(400).json({ error: 'Google account email must be verified' });
       }
 
-      const { email, name, picture, sub: providerId } = decodedToken;
+      // Safely extract fields from decoded token with defaults
+      const email = decodedToken.email || null;
+      const name = decodedToken.name || decodedToken.displayName || null;
+      const picture = decodedToken.picture || decodedToken.photoURL || null;
+      const providerId = decodedToken.sub || decodedToken.uid || null;
+      // Optional first/last name from client (only available first Apple sign-in)
+      const bodyFirstName = req.body.firstName;
+      const bodyLastName = req.body.lastName;
+      
+      // Log decoded token for debugging
+      console.log('Decoded token:', {
+        email,
+        name,
+        picture,
+        providerId,
+        provider,
+        hasName: !!name,
+        nameType: typeof name,
+        allKeys: Object.keys(decodedToken)
+      });
+      
+      // For Apple, email might be null on subsequent sign-ins, use providerId as fallback
+      if (!email && provider === 'apple') {
+        // Apple user without email - use providerId to find user
+        const appleUser = await User.findOne({ 
+          providerId: providerId, 
+          provider: 'apple' 
+        });
+        
+        if (appleUser) {
+          // Existing Apple user without email
+          appleUser.lastLogin = new Date();
+          await appleUser.save();
+          
+          const accessToken = jwt.sign(
+            { userId: appleUser._id, role: appleUser.role },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
+          );
+
+          const refreshToken = jwt.sign(
+            { userId: appleUser._id, role: appleUser.role },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
+          );
+
+          return res.json({
+            message: 'Apple login successful',
+            token: {
+              accessToken,
+              refreshToken,
+              tokenType: 'Bearer',
+              expiresIn: 3600,
+              isNewUser: false
+            },
+            user: {
+              id: appleUser._id,
+              email: appleUser.email,
+              firstName: appleUser.firstName,
+              lastName: appleUser.lastName,
+              role: appleUser.role,
+              fullName: appleUser.fullName,
+              profilePicture: appleUser.profilePicture,
+              provider: appleUser.provider
+            }
+          });
+        } else {
+          // New Apple user without email - this is OK now, we'll create them below
+          // Continue to the user creation logic below
+          console.log('New Apple user without email - will create user with providerId only');
+        }
+      }
       
       // Check if user already exists
-      let user = await User.findOne({ 
-        $or: [
-          { email: email },
-          { providerId: providerId, provider: 'google' }
-        ]
-      });
+      // For Apple users without email, only check by providerId
+      // For others, check by email or providerId+provider
+      let user;
+      if (!email && provider === 'apple') {
+        // Apple user without email - only check by providerId
+        user = await User.findOne({ 
+          providerId: providerId, 
+          provider: provider 
+        });
+      } else {
+        // User with email or non-Apple provider - check by email or providerId
+        user = await User.findOne({ 
+          $or: [
+            email ? { email: email } : {},
+            { providerId: providerId, provider: provider }
+          ].filter(condition => Object.keys(condition).length > 0) // Remove empty objects
+        });
+      }
 
       if (user) {
         // User exists, update last login and return user data
         user.lastLogin = new Date();
-        user.provider = 'google';
+        user.provider = provider;
         user.providerId = providerId;
-        user.emailVerified = true;
+        user.emailVerified = provider === 'google' ? true : (user.emailVerified || false);
         
         // Update profile picture if not set
         if (!user.profilePicture && picture) {
@@ -324,12 +412,13 @@ class AuthController {
         );
 
         return res.json({
-          message: 'Google login successful',
+          message: `${provider === 'apple' ? 'Apple' : 'Google'} login successful`,
           token: {
             accessToken,
             refreshToken,
             tokenType: 'Bearer',
-            expiresIn: 3600
+            expiresIn: 3600,
+            isNewUser: false
           },
           user: {
             id: user._id,
@@ -344,19 +433,53 @@ class AuthController {
         });
       }
 
-      // Create new user from Google data
-      const [firstName, ...lastNameParts] = name.split(' ');
-      const lastName = lastNameParts.join(' ') || '';
+      // Create new user from provider data
+      // Safely handle name parsing - Apple may not provide name on subsequent sign-ins
+      // Also honor first/last name provided by the client on first sign-in
+      let firstName = 'User';
+      let lastName = 'User';
+      
+      try {
+        if (bodyFirstName || bodyLastName) {
+          firstName = (bodyFirstName && bodyFirstName.trim()) || 'User';
+          lastName = (bodyLastName && bodyLastName.trim()) || 'User';
+        } else if (name && typeof name === 'string' && name.trim().length > 0) {
+          const nameParts = name.trim().split(/\s+/);
+          firstName = nameParts[0] || 'User';
+          lastName = nameParts.slice(1).join(' ') || 'User';
+        } else if (decodedToken.given_name || decodedToken.family_name) {
+          // For Apple, check if name is in separate fields (given_name, family_name)
+          firstName = (decodedToken.given_name && decodedToken.given_name.trim()) || 'User';
+          lastName = (decodedToken.family_name && decodedToken.family_name.trim()) || 'User';
+        }
+        // If no name is available, defaults remain ('User', 'User')
+      } catch (nameError) {
+        console.error('Error parsing name:', nameError);
+        // Defaults already set to avoid validation errors
+        firstName = 'User';
+        lastName = 'User';
+      }
+
+      // For Apple users, email might be null - that's OK now that schema allows it
+      // But we should still try to use providerId as a fallback identifier
+      if (!email && provider === 'apple') {
+        console.log('Apple user without email - using providerId as identifier');
+      }
+
+      // Fallback email for Apple users if none is provided (helps avoid validation issues)
+      const effectiveEmail = email || (provider === 'apple' && providerId
+        ? `${providerId}@appleuser.noreply`
+        : undefined);
 
       user = new User({
-        email,
-        firstName,
-        lastName,
+        email: effectiveEmail,
+        firstName: firstName || 'User',
+        lastName: lastName || 'User',
         role,
-        provider: 'google',
+        provider: provider,
         providerId,
-        emailVerified: true,
-        profilePicture: picture,
+        emailVerified: provider === 'google' ? true : (effectiveEmail ? true : false),
+        profilePicture: picture || undefined,
         isActive: true
       });
 
@@ -376,12 +499,13 @@ class AuthController {
       );
 
       res.status(201).json({
-        message: 'Google signup successful',
+        message: `${provider === 'apple' ? 'Apple' : 'Google'} signup successful`,
         token: {
           accessToken,
           refreshToken,
           tokenType: 'Bearer',
-          expiresIn: 3600
+          expiresIn: 3600,
+          isNewUser: true
         },
         user: {
           id: user._id,
@@ -396,16 +520,18 @@ class AuthController {
       });
 
     } catch (error) {
-      console.error('Google authentication error:', error);
+      console.error('Firebase authentication error:', error);
       console.error('Error code:', error.code);
       console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
       
+      // Handle specific Firebase errors
       if (error.code === 'auth/id-token-expired') {
-        return res.status(401).json({ error: 'Google token expired. Please try again.' });
+        return res.status(401).json({ error: 'Token expired. Please try again.' });
       }
       
       if (error.code === 'auth/invalid-id-token') {
-        return res.status(401).json({ error: 'Invalid Google token. Please try again.' });
+        return res.status(401).json({ error: 'Invalid token. Please try again.' });
       }
       
       if (error.code === 'auth/argument-error') {
@@ -415,10 +541,28 @@ class AuthController {
         });
       }
       
+      // Handle Mongoose validation errors
+      if (error.name === 'ValidationError') {
+        const validationErrors = Object.values(error.errors).map(err => err.message);
+        return res.status(400).json({ 
+          error: 'Validation error',
+          details: validationErrors.join(', ')
+        });
+      }
+      
+      // Handle duplicate key errors (e.g., duplicate email)
+      if (error.code === 11000) {
+        return res.status(400).json({ 
+          error: 'User already exists',
+          details: 'An account with this email or provider ID already exists'
+        });
+      }
+      
+      const providerName = provider === 'apple' ? 'Apple' : 'Google';
       res.status(500).json({ 
-        error: 'Google authentication failed',
-        details: error.message,
-        code: error.code
+        error: `${providerName} authentication failed`,
+        details: error.message || 'An unexpected error occurred',
+        code: error.code || 'UNKNOWN_ERROR'
       });
     }
   }

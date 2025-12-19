@@ -4,8 +4,12 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
-    required: true,
+    required: function() {
+      // Email is required for local and Google providers, but optional for Apple
+      return this.provider !== 'apple';
+    },
     unique: true,
+    sparse: true, // Allow multiple null values (for Apple users without email)
     lowercase: true,
     trim: true
   },
@@ -18,7 +22,7 @@ const userSchema = new mongoose.Schema({
   },
   provider: {
     type: String,
-    enum: ['local', 'google', 'facebook'],
+    enum: ['local', 'google', 'facebook', 'apple'],
     default: 'local'
   },
   providerId: {

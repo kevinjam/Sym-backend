@@ -26,7 +26,8 @@ const authSchemas = {
     firstName: Joi.string().min(2).max(50).required(),
     lastName: Joi.string().min(2).max(50).required(),
     role: Joi.string().valid('patient', 'doctor').required(),
-    provider: Joi.string().valid('local', 'google', 'facebook').default('local'),
+    // Allow Apple as a social provider too
+    provider: Joi.string().valid('local', 'google', 'facebook', 'apple').default('local'),
     providerId: Joi.string().optional(),
     phoneNumber: Joi.string().pattern(/^\+?[\d\s\-\(\)]+$/).optional(),
     dateOfBirth: Joi.date().max('now').optional(),
