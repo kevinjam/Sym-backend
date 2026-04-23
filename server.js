@@ -1,3 +1,4 @@
+const dns = require('dns');
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -6,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
+
+// Helps some networks where IPv6/SRV resolution misbehaves (does not fix invalid cluster hostnames).
+dns.setDefaultResultOrder('ipv4first');
 
 const authRoutes = require('./routes/auth');
 const patientRoutes = require('./routes/patient');
@@ -27,6 +31,7 @@ const adherenceRoutes = require('./routes/adherence');
 const prescriptionScannerRoutes = require('./routes/prescriptionScanner');
 const scannedPrescriptionRoutes = require('./routes/scannedPrescription');
 const aiScannerRoutes = require('./routes/aiScanner');
+const dashboardRoutes = require('./routes/dashboard');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const schedulerService = require('./utils/scheduler');
@@ -104,6 +109,7 @@ app.get('/api/public/version', (req, res) => {
 // Protected routes (authentication required)
 app.use('/api/auth', authRoutes);
 app.use('/api/patient', patientRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/medication', medicationRoutes);
 app.use('/api/notification', notificationRoutes);
 app.use('/api/category', categoryRoutes);
@@ -199,6 +205,14 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sym_medic
 })
 .catch((err) => {
   console.error('MongoDB connection error:', err);
+  if (err.code === 'ENOTFOUND' || String(err.message || '').includes('querySrv')) {
+    console.error(
+      '\nMongoDB SRV lookup failed (ENOTFOUND). The hostname in MONGODB_URI is not in DNS — ' +
+      'common causes: cluster deleted/renamed, wrong Atlas project, or an old copied URI.\n' +
+      'Fix: Atlas → Database → Connect → Drivers → copy the current string into MONGODB_URI. ' +
+      'If SRV is blocked on your network, use the standard mongodb://… connection string from the same screen.\n'
+    );
+  }
 });
 
 const PORT = process.env.PORT || 9000;

@@ -459,9 +459,9 @@ Respond in JSON format:
             'X-Title': 'Sym Health App - Adherence Insights'
           },
           body: JSON.stringify({
-            model: retryCount > 1 ? 
-              (process.env.AI_HEALTH_FALLBACK_MODEL || 'mistralai/mistral-small-3.1-24b-instruct:free') : 
-              (process.env.AI_HEALTH_MODEL || 'deepseek/deepseek-r1:free'),
+            model: retryCount > 1 ?
+              (process.env.AI_HEALTH_FALLBACK_MODEL || 'mistralai/mistral-7b-instruct:free') :
+              (process.env.AI_HEALTH_MODEL || 'meta-llama/llama-3.1-8b-instruct:free'),
             messages: [
               {
                 role: 'user',

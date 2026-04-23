@@ -1,264 +1,107 @@
 const express = require('express');
-const { validate, authSchemas } = require('../middleware/validation');
-const { authenticateToken } = require('../middleware/auth');
-const AuthController = require('../controllers/authController');
+const jwt = require('jsonwebtoken');
+const RefreshToken = require('../models/RefreshToken');
+const {
+  tokenHash,
+  signAccessToken,
+  signRefreshToken,
+  accessExpiresInSeconds,
+} = require('../utils/tokenService');
 
 const router = express.Router();
 
 /**
- * @swagger
- * /api/auth/register:
- *   post:
- *     summary: Register a new user
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *               - firstName
- *               - lastName
- *               - role
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *               firstName:
- *                 type: string
- *               lastName:
- *                 type: string
- *               role:
- *                 type: string
- *                 enum: [patient, doctor]
- *     responses:
- *       201:
- *         description: User registered successfully
- *       400:
- *         description: Validation error
+ * POST /api/auth/refresh-token
+ * Body: { refreshToken: string }
+ * Returns: { accessToken, refreshToken, tokenType, expiresIn }
  */
-router.post('/register', validate(authSchemas.register), AuthController.register);
+router.post(['/refresh-token', '/refresh'], async (req, res) => {
+  try {
+    const refreshToken = req.body?.refreshToken;
+    if (!refreshToken || typeof refreshToken !== 'string') {
+      return res.status(400).json({ error: 'refreshToken is required' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(
+        refreshToken,
+        process.env.REFRESH_TOKEN_SECRET || process.env.JWT_SECRET
+      );
+    } catch (error) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+
+    const userId = payload.userId || payload.id || payload.sub;
+    if (!userId) {
+      return res.status(401).json({ error: 'Invalid refresh token payload' });
+    }
+
+    const oldHash = tokenHash(refreshToken);
+    const session = await RefreshToken.findOne({
+      userId: String(userId),
+      tokenHash: oldHash,
+      revokedAt: null,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!session) {
+      return res.status(401).json({ error: 'Refresh token is no longer valid' });
+    }
+
+    // Rotate refresh token and invalidate old one to prevent reuse.
+    const newRefreshToken = signRefreshToken({ userId });
+    const newHash = tokenHash(newRefreshToken);
+    const newExpiresAt = new Date(
+      Date.now() + (Number(process.env.REFRESH_TOKEN_TTL_MS) || 30 * 24 * 60 * 60 * 1000)
+    );
+
+    session.revokedAt = new Date();
+    session.replacedByTokenHash = newHash;
+    await session.save();
+
+    await RefreshToken.create({
+      userId: String(userId),
+      tokenHash: newHash,
+      expiresAt: newExpiresAt,
+    });
+
+    const accessToken = signAccessToken({
+      userId: String(userId),
+      role: payload.role || 'patient',
+      email: payload.email,
+      conditions: payload.conditions || [],
+    });
+
+    return res.status(200).json({
+      accessToken,
+      refreshToken: newRefreshToken,
+      tokenType: 'Bearer',
+      expiresIn: accessExpiresInSeconds(),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to refresh token' });
+  }
+});
 
 /**
- * @swagger
- * /api/auth/login:
- *   post:
- *     summary: Login user
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
- *       401:
- *         description: Invalid credentials
+ * POST /api/auth/logout
+ * Body: { refreshToken: string }
  */
-router.post('/login', validate(authSchemas.login), AuthController.login);
+router.post('/logout', async (req, res) => {
+  try {
+    const refreshToken = req.body?.refreshToken;
+    if (refreshToken && typeof refreshToken === 'string') {
+      const hash = tokenHash(refreshToken);
+      await RefreshToken.updateOne(
+        { tokenHash: hash, revokedAt: null },
+        { $set: { revokedAt: new Date() } }
+      );
+    }
+    return res.status(200).json({ message: 'Logged out', success: true });
+  } catch (error) {
+    return res.status(500).json({ error: 'Logout failed' });
+  }
+});
 
-/**
- * @swagger
- * /api/auth/profile:
- *   get:
- *     summary: Get user profile
- *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: User profile retrieved successfully
- *       401:
- *         description: Unauthorized
- */
-router.get('/profile', authenticateToken, AuthController.getProfile);
-
-/**
- * @swagger
- * /api/auth/profile:
- *   put:
- *     summary: Update user profile
- *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               firstName:
- *                 type: string
- *               lastName:
- *                 type: string
- *               phoneNumber:
- *                 type: string
- *               fcmToken:
- *                 type: string
- *     responses:
- *       200:
- *         description: Profile updated successfully
- *       401:
- *         description: Unauthorized
- */
-router.put('/profile', authenticateToken, AuthController.updateProfile);
-
-/**
- * @swagger
- * /api/auth/refresh:
- *   post:
- *     summary: Refresh JWT token
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - refreshToken
- *             properties:
- *               refreshToken:
- *                 type: string
- *                 description: Refresh token
- *     responses:
- *       200:
- *         description: Token refreshed successfully
- *       400:
- *         description: Refresh token is required
- *       401:
- *         description: Invalid or expired refresh token
- */
-router.post('/refresh', AuthController.refreshToken);
-
-/**
- * @swagger
- * /api/auth/fcm-token:
- *   post:
- *     summary: Update FCM token for push notifications
- *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - fcmToken
- *             properties:
- *               fcmToken:
- *                 type: string
- *                 description: Firebase Cloud Messaging token
- *     responses:
- *       200:
- *         description: FCM token updated successfully
- *       400:
- *         description: FCM token is required
- *       401:
- *         description: Unauthorized
- */
-router.post('/fcm-token', authenticateToken, AuthController.updateFcmToken);
-
-/**
- * @swagger
- * /api/auth/fcm-token:
- *   delete:
- *     summary: Remove FCM token (logout)
- *     tags: [Authentication]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: FCM token removed successfully
- *       401:
- *         description: Unauthorized
- */
-router.delete('/fcm-token', authenticateToken, AuthController.removeFcmToken);
-
-/**
- * @swagger
- * /api/auth/google:
- *   post:
- *     summary: Google authentication (signup/login)
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - idToken
- *               - role
- *             properties:
- *               idToken:
- *                 type: string
- *                 description: Google ID token from client
- *               role:
- *                 type: string
- *                 enum: [patient, doctor]
- *                 description: User role
- *     responses:
- *       200:
- *         description: Google login successful
- *       201:
- *         description: Google signup successful
- *       400:
- *         description: Validation error
- *       401:
- *         description: Invalid Google token
- */
-router.post('/google', AuthController.googleAuth);
-
-/**
- * @swagger
- * /api/auth/google/verify:
- *   post:
- *     summary: Verify Google ID token
- *     tags: [Authentication]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - idToken
- *             properties:
- *               idToken:
- *                 type: string
- *                 description: Google ID token to verify
- *     responses:
- *       200:
- *         description: Token verified successfully
- *       400:
- *         description: Token is required
- *       401:
- *         description: Invalid or expired token
- */
-router.post('/google/verify', AuthController.verifyGoogleToken);
-
-// Test endpoint for Firebase configuration
-router.get('/test-firebase', AuthController.testFirebaseConfig);
-
-// Test endpoint for Firebase token verification
-router.post('/test-token', AuthController.testFirebaseToken);
-
-module.exports = router; 
+module.exports = router;

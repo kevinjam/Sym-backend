@@ -1,57 +1,63 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
 
-// Verify JWT token
-const authenticateToken = async (req, res, next) => {
+function extractBearerToken(req) {
+  const auth = req.headers.authorization || req.headers.Authorization;
+  if (!auth || typeof auth !== 'string') return null;
+  if (!auth.startsWith('Bearer ')) return null;
+  return auth.substring('Bearer '.length).trim();
+}
+
+function authenticateToken(req, res, next) {
   try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-
+    const token = extractBearerToken(req);
     if (!token) {
-      return res.status(401).json({ error: 'Access token required' });
+      return res.status(401).json({ error: 'Authorization token missing' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId).select('-password');
-    
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid token' });
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = payload.userId || payload.id || payload.sub;
+    if (!userId) {
+      return res.status(401).json({ error: 'Invalid token payload' });
     }
 
-    if (!user.isActive) {
-      return res.status(401).json({ error: 'Account is deactivated' });
-    }
-
-    req.user = user;
-    next();
+    req.user = {
+      _id: userId,
+      id: userId,
+      role: payload.role || 'patient',
+      conditions: payload.conditions || [],
+      email: payload.email,
+    };
+    return next();
   } catch (error) {
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Token expired' });
+      return res.status(401).json({ error: 'Access token expired' });
     }
-    return res.status(500).json({ error: 'Authentication error' });
+    return res.status(401).json({ error: 'Invalid access token' });
   }
-};
+}
 
-// Role-based access control
-const requireRole = (roles) => {
+function requirePatient(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!req.user.role || req.user.role === 'patient') {
+    return next();
+  }
+  return res.status(403).json({ error: 'Patient role required' });
+}
+
+function requireRole(roles) {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ error: 'Authentication required' });
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
-
-    next();
+    return next();
   };
-};
+}
 
-// Specific role middleware
-const requirePatient = requireRole(['patient']);
 const requireDoctor = requireRole(['doctor']);
 const requireAnyRole = requireRole(['patient', 'doctor']);
 
@@ -60,5 +66,5 @@ module.exports = {
   requireRole,
   requirePatient,
   requireDoctor,
-  requireAnyRole
-}; 
+  requireAnyRole,
+};

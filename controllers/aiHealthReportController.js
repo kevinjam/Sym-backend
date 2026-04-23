@@ -1,5 +1,82 @@
 const AiHealthReport = require('../models/AiHealthReport');
 
+/** OpenRouter chat completions (see https://openrouter.ai/docs/quickstart) */
+const OPENROUTER_CHAT_URL =
+  process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
+
+/**
+ * Default model chain when env models 404 or are deprecated.
+ * OpenRouter retires/renames free models often — keep several options.
+ */
+const DEFAULT_AI_HEALTH_MODEL_CHAIN = [
+  'meta-llama/llama-3.1-8b-instruct:free',
+  'mistralai/mistral-7b-instruct:free',
+  'google/gemma-2-9b-it:free',
+  'deepseek/deepseek-chat',
+];
+
+function buildHealthModelCandidates() {
+  const primary = process.env.AI_HEALTH_MODEL || DEFAULT_AI_HEALTH_MODEL_CHAIN[0];
+  const secondary = process.env.AI_HEALTH_FALLBACK_MODEL;
+  const ordered = [primary, secondary, ...DEFAULT_AI_HEALTH_MODEL_CHAIN].filter(Boolean);
+  return [...new Set(ordered)];
+}
+
+function shouldTryNextModelForOpenRouter(status, bodyText) {
+  if (status === 404) return true;
+  const t = (bodyText || '').toLowerCase();
+  if (status === 400 && /no endpoints|model not found|invalid model|unknown model|does not exist|not supported/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @returns {Promise<{ ok: boolean, status: number, statusText: string, text: string, json: object|null }>}
+ */
+async function openRouterChatCompletion(model, messages) {
+  const timeoutMs = parseInt(process.env.AI_HEALTH_TIMEOUT_MS || '120000', 10);
+  const maxTokens = parseInt(process.env.AI_HEALTH_MAX_TOKENS || '2000', 10);
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(OPENROUTER_CHAT_URL, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.APP_URL || 'http://localhost:9000',
+        'X-Title': process.env.OPENROUTER_APP_TITLE || 'Sym Health Platform',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: 0.3,
+      }),
+    });
+    const text = await response.text();
+    let json = null;
+    if (text) {
+      try {
+        json = JSON.parse(text);
+      } catch (_) {
+        /* non-JSON body */
+      }
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      text,
+      json,
+    };
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
 // AI-powered health report analysis
 const analyzeHealthReport = async (req, res) => {
   try {
@@ -14,13 +91,6 @@ const analyzeHealthReport = async (req, res) => {
     }
 
     console.log(`🤖 Analyzing health report for user: ${userId}`);
-    
-    // Define model priority (primary and fallback)
-    const primaryModel = process.env.AI_HEALTH_MODEL || 'deepseek/deepseek-r1:free';
-    const fallbackModel = process.env.AI_HEALTH_FALLBACK_MODEL || 'mistralai/mistral-small-3.1-24b-instruct:free';
-    let currentModel = primaryModel;
-    
-    console.log(`🤖 Using AI model: ${currentModel}`);
 
     // Check if this is test mode (no AI analysis)
     if (process.env.AI_HEALTH_TEST_MODE === 'true') {
@@ -74,100 +144,110 @@ Important guidelines:
 
 Respond only with valid JSON, no additional text.`;
 
-    // Call OpenRouter API with retry logic
-    let openRouterResponse;
-    let retryCount = 0;
-    const maxRetries = parseInt(process.env.AI_HEALTH_MAX_RETRIES) || 8; // Increased to 8 retries
-    
-    while (retryCount <= maxRetries) {
-      try {
-        openRouterResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': process.env.APP_URL || 'http://localhost:9000',
-            'X-Title': 'Sym Health App'
-          },
-          body: JSON.stringify({
-            model: currentModel,
-            messages: [
-              {
-                role: 'user',
-                content: aiPrompt
-              }
-            ],
-            max_tokens: 1000,
-            temperature: 0.3
-          }),
-          timeout: 60000 // 60 second timeout for longer processing
-        });
-        
-        // If successful or non-retryable error, break the loop
-        if (openRouterResponse.ok || openRouterResponse.status !== 429) {
-          break;
-        }
-        
-        // If rate limited and we have retries left, wait and retry
-        if (openRouterResponse.status === 429 && retryCount < maxRetries) {
-          // Try fallback model if primary model is rate limited
-          if (currentModel === primaryModel && retryCount === 0) {
-            console.log(`🤖 Primary model rate limited, trying fallback model: ${fallbackModel}`);
-            currentModel = fallbackModel;
-            retryCount++;
+    const systemMessage =
+      'You are a professional health documentation assistant. The user will supply a patient symptom narrative and a required JSON schema. Output valid JSON only — no markdown fences, no commentary before or after the JSON.';
+
+    const messages = [
+      { role: 'system', content: systemMessage },
+      { role: 'user', content: aiPrompt },
+    ];
+
+    const modelCandidates = buildHealthModelCandidates();
+    const maxRateRetries = parseInt(process.env.AI_HEALTH_MAX_RETRIES, 10) || 6;
+
+    let aiData = null;
+    let lastOpenRouterResult = null;
+
+    outer: for (let mi = 0; mi < modelCandidates.length; mi++) {
+      const model = modelCandidates[mi];
+      for (let attempt = 0; attempt <= maxRateRetries; attempt++) {
+        try {
+          if (attempt > 0) {
+            console.log(`🤖 Retrying model ${model} after rate limit (attempt ${attempt + 1}/${maxRateRetries + 1})`);
+          } else {
+            console.log(`🤖 Using AI model: ${model}`);
+          }
+
+          const result = await openRouterChatCompletion(model, messages);
+          lastOpenRouterResult = result;
+
+          if (result.ok && result.json?.choices?.length) {
+            aiData = result.json;
+            break outer;
+          }
+          if (result.ok) {
+            console.error('🤖 OpenRouter returned success but no choices[]; body preview:', (result.text || '').slice(0, 400));
+            if (mi < modelCandidates.length - 1) {
+              continue outer;
+            }
+            break outer;
+          }
+
+          const errBody = result.text || '';
+          const openRouterMsg = result.json?.error?.message || result.json?.message || '';
+          console.error('OpenRouter API error:', {
+            status: result.status,
+            statusText: result.statusText,
+            model,
+            openRouterMessage: openRouterMsg || undefined,
+            bodyPreview: errBody.slice(0, 400),
+          });
+
+          if (result.status === 429 && attempt < maxRateRetries) {
+            const waitTime = Math.pow(2, attempt) * 5000;
+            console.log(`🤖 Rate limited — waiting ${waitTime}ms before retry`);
+            await new Promise((r) => setTimeout(r, waitTime));
             continue;
           }
-          
-          const waitTime = Math.pow(2, retryCount) * 5000; // Exponential backoff: 5s, 10s, 20s, 40s, 80s, 160s, 320s, 640s
-          console.log(`🤖 Rate limited, retrying in ${waitTime}ms (attempt ${retryCount + 1}/${maxRetries + 1})`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          retryCount++;
-          continue;
+
+          if (shouldTryNextModelForOpenRouter(result.status, errBody + openRouterMsg) && mi < modelCandidates.length - 1) {
+            console.warn(`🤖 Model unavailable for this request; trying next model in chain…`);
+            continue outer;
+          }
+
+          break outer;
+        } catch (fetchError) {
+          console.error('🤖 OpenRouter request failed:', fetchError.message || fetchError);
+          if (attempt < maxRateRetries) {
+            const waitTime = Math.pow(2, attempt) * 5000;
+            await new Promise((r) => setTimeout(r, waitTime));
+            continue;
+          }
+          if (mi < modelCandidates.length - 1) {
+            console.warn('🤖 Trying next model after network error…');
+            continue outer;
+          }
+          throw fetchError;
         }
-        
-        break;
-      } catch (fetchError) {
-        console.error('🤖 Fetch error:', fetchError);
-        if (retryCount < maxRetries) {
-          const waitTime = Math.pow(2, retryCount) * 5000; // Exponential backoff: 5s, 10s, 20s, 40s, 80s, 160s, 320s, 640s
-          console.log(`🤖 Fetch failed, retrying in ${waitTime}ms (attempt ${retryCount + 1}/${maxRetries + 1})`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          retryCount++;
-          continue;
-        }
-        throw fetchError;
       }
     }
 
-    if (!openRouterResponse.ok) {
-      console.error('OpenRouter API error:', openRouterResponse.status, openRouterResponse.statusText);
-      
-      // Handle specific error cases
-      if (openRouterResponse.status === 429) {
+    if (!aiData) {
+      const st = lastOpenRouterResult?.status;
+      if (st === 429) {
         return res.status(429).json({
           success: false,
           error: 'AI service rate limit exceeded. Please try again in a few minutes.',
-          retryAfter: 60 // seconds
-        });
-      } else if (openRouterResponse.status === 401) {
-        return res.status(500).json({
-          success: false,
-          error: 'AI service authentication failed. Please contact administrator.'
-        });
-      } else if (openRouterResponse.status === 402) {
-        return res.status(500).json({
-          success: false,
-          error: 'AI service quota exceeded. Please contact administrator.'
-        });
-      } else {
-        return res.status(500).json({
-          success: false,
-          error: 'AI analysis service temporarily unavailable'
+          retryAfter: 60,
         });
       }
+      if (st === 401) {
+        return res.status(500).json({
+          success: false,
+          error: 'AI service authentication failed. Please contact administrator.',
+        });
+      }
+      if (st === 402) {
+        return res.status(500).json({
+          success: false,
+          error: 'AI service quota exceeded. Please contact administrator.',
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'AI analysis service temporarily unavailable',
+      });
     }
-
-    const aiData = await openRouterResponse.json();
     const rawAiResponse = aiData.choices?.[0]?.message?.content || '';
 
     console.log('🤖 Raw AI response:', rawAiResponse);

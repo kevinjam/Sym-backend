@@ -5,6 +5,7 @@ const validate = (schema) => {
   return (req, res, next) => {
     const { error } = schema.validate(req.body);
     if (error) {
+      console.warn('[validation] %s %s failed: %j', req.method, req.originalUrl, error.details);
       return res.status(400).json({
         error: 'Validation error',
         details: error.details.map(detail => detail.message)
@@ -67,6 +68,44 @@ const authSchemas = {
 };
 
 // Medication validation schemas
+const catalogPatientPrescribeSchema = Joi.object({
+  medicationId: Joi.string().required(),
+  dosage: Joi.object({
+    amount: Joi.number().positive().required(),
+    unit: Joi.string().valid('mg', 'mcg', 'ml', 'units', 'puffs', 'tablets', 'capsules').required(),
+    frequency: Joi.string().valid(
+      'once_daily', 'twice_daily', 'three_times_daily', 'four_times_daily', 'as_needed', 'weekly', 'monthly'
+    ).required(),
+    instructions: Joi.string().optional()
+  }).required(),
+  schedule: Joi.array().items(
+    Joi.object({
+      time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).required(),
+      isActive: Joi.boolean().default(true)
+    })
+  ).min(1).required(),
+  priority: Joi.string().valid('low', 'medium', 'high', 'critical').default('medium'),
+  startDate: Joi.date().default(Date.now),
+  endDate: Joi.date().optional(),
+  notes: Joi.string().optional()
+});
+
+const mobilePatientMedicationCreate = Joi.object({
+  name: Joi.string().min(1).max(200).required(),
+  dosage: Joi.string().min(1).max(500).required(),
+  scheduleTimes: Joi.array()
+    .items(Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/))
+    .min(1)
+    .required(),
+  linkedSymptoms: Joi.array().items(Joi.string()).max(100).default([]),
+  description: Joi.string().max(1000).allow('', null).optional(),
+  category: Joi.string().max(100).allow(null).optional(),
+  dosageForm: Joi.string().valid('tablet', 'capsule', 'liquid', 'injection', 'inhaler', 'cream', 'other').allow(null).optional(),
+  priority: Joi.string().valid('low', 'medium', 'high', 'critical').allow(null).optional(),
+  startDate: Joi.date().optional().allow(null),
+  endDate: Joi.date().optional().allow(null)
+});
+
 const medicationSchemas = {
   create: Joi.object({
     name: Joi.string().min(2).max(100).required(),
@@ -99,28 +138,15 @@ const medicationSchemas = {
     ).optional()
   }),
 
-  prescribe: Joi.object({
-    patientId: Joi.string().required(),
-    medicationId: Joi.string().required(),
-    dosage: Joi.object({
-      amount: Joi.number().positive().required(),
-      unit: Joi.string().valid('mg', 'mcg', 'ml', 'units', 'puffs', 'tablets', 'capsules').required(),
-      frequency: Joi.string().valid(
-        'once_daily', 'twice_daily', 'three_times_daily', 'four_times_daily', 'as_needed', 'weekly', 'monthly'
-      ).required(),
-      instructions: Joi.string().optional()
-    }).required(),
-    schedule: Joi.array().items(
-      Joi.object({
-        time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/).required(),
-        isActive: Joi.boolean().default(true)
-      })
-    ).min(1).required(),
-    priority: Joi.string().valid('low', 'medium', 'high', 'critical').default('medium'),
-    startDate: Joi.date().default(Date.now),
-    endDate: Joi.date().optional(),
-    notes: Joi.string().optional()
-  }),
+  // Prescribe from catalog (patient id always comes from JWT)
+  prescribe: catalogPatientPrescribeSchema,
+
+  mobilePatientMedicationCreate,
+
+  addMedicationFlexible: Joi.alternatives().try(
+    catalogPatientPrescribeSchema,
+    mobilePatientMedicationCreate
+  ),
 
   update: Joi.object({
     name: Joi.string().min(2).max(100).optional(),

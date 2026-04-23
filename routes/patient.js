@@ -113,7 +113,19 @@ router.get('/medications', PatientController.getMedications);
  *       500:
  *         description: Server error
  */
-router.post('/medications', validate(medicationSchemas.prescribe), PatientController.addMedication);
+router.post(
+  '/medications',
+  validate(medicationSchemas.addMedicationFlexible),
+  PatientController.addMedication,
+);
+
+router.get('/medications/:id', PatientController.getMedicationById);
+router.put(
+  '/medications/:id',
+  validate(medicationSchemas.mobilePatientMedicationCreate),
+  PatientController.updatePatientMedicationMobile,
+);
+router.delete('/medications/:id', PatientController.deletePatientMedication);
 
 /**
  * @swagger
@@ -134,6 +146,9 @@ router.post('/medications', validate(medicationSchemas.prescribe), PatientContro
  *         description: Medication marked as taken
  */
 router.post('/medications/:id/take', PatientController.takeMedication);
+
+// Flutter Retrofit uses POST /patient/medications/{id}/logs — same behavior as /take
+router.post('/medications/:id/logs', PatientController.takeMedication);
 
 /**
  * @swagger
