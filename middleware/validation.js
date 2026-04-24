@@ -59,7 +59,10 @@ const authSchemas = {
 
   googleAuth: Joi.object({
     idToken: Joi.string().required(),
-    role: Joi.string().valid('patient', 'doctor').required()
+    role: Joi.string().valid('patient', 'doctor').required(),
+    firstName: Joi.string().max(100).optional(),
+    lastName: Joi.string().max(100).optional(),
+    manualEmail: Joi.string().email().optional(),
   }),
 
   verifyGoogleToken: Joi.object({

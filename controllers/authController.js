@@ -1,6 +1,75 @@
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const { admin } = require('../config/firebase');
 const User = require('../models/User');
+const googleOAuthClient = new OAuth2Client();
+const isPrivateRelayEmail = (email) =>
+  typeof email === 'string' &&
+  email.toLowerCase().trim().endsWith('@privaterelay.appleid.com');
+
+function googleAudiencesFromEnv() {
+  const raw = [
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_IOS_CLIENT_ID,
+    process.env.IOS_GOOGLE_CLIENT_ID,
+  ]
+    .filter(Boolean)
+    .join(',');
+
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function verifySocialIdToken(idToken) {
+  const normalized = String(idToken || '').trim().replace(/^Bearer\s+/i, '');
+  if (!normalized) {
+    const err = new Error('ID token is required');
+    err.code = 'auth/argument-error';
+    throw err;
+  }
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(normalized);
+    const provider = decodedToken.firebase?.sign_in_provider === 'apple.com' ? 'apple' : 'google';
+    return { decodedToken, provider };
+  } catch (firebaseError) {
+    const canFallbackToGoogle =
+      firebaseError?.code === 'auth/argument-error' ||
+      firebaseError?.code === 'auth/invalid-id-token' ||
+      String(firebaseError?.message || '').includes('Decoding Firebase ID token failed');
+
+    if (!canFallbackToGoogle) {
+      throw firebaseError;
+    }
+
+    const audiences = googleAudiencesFromEnv();
+    const ticket = await googleOAuthClient.verifyIdToken({
+      idToken: normalized,
+      audience: audiences.length > 0 ? audiences : undefined,
+    });
+    const payload = ticket.getPayload();
+    if (!payload) {
+      throw firebaseError;
+    }
+
+    return {
+      provider: 'google',
+      decodedToken: {
+        uid: payload.sub,
+        sub: payload.sub,
+        email: payload.email,
+        email_verified: payload.email_verified,
+        name: payload.name,
+        picture: payload.picture,
+        given_name: payload.given_name,
+        family_name: payload.family_name,
+        firebase: { sign_in_provider: 'google.com' },
+      },
+    };
+  }
+}
 
 class AuthController {
   // Register a new user
@@ -280,11 +349,11 @@ class AuthController {
         return res.status(400).json({ error: 'Valid role (patient or doctor) is required' });
       }
 
-      // Verify the Firebase ID token (works for both Google and Apple)
-      const decodedToken = await admin.auth().verifyIdToken(idToken);
-      
-      // Determine provider from Firebase token
-      provider = decodedToken.firebase?.sign_in_provider === 'apple.com' ? 'apple' : 'google';
+      // Verify token with Firebase first; if token is a pure Google ID token,
+      // fallback verification via google-auth-library.
+      const verification = await verifySocialIdToken(idToken);
+      const decodedToken = verification.decodedToken;
+      provider = verification.provider;
       
       // Apple may not always provide email_verified, so only check for Google
       if (provider === 'google' && !decodedToken.email_verified) {
@@ -296,9 +365,36 @@ class AuthController {
       const name = decodedToken.name || decodedToken.displayName || null;
       const picture = decodedToken.picture || decodedToken.photoURL || null;
       const providerId = decodedToken.sub || decodedToken.uid || null;
+      const appleUserId = provider === 'apple' ? providerId : null;
       // Optional first/last name from client (only available first Apple sign-in)
       const bodyFirstName = req.body.firstName;
       const bodyLastName = req.body.lastName;
+      const manualEmailRaw = req.body.manualEmail;
+      const manualEmail =
+        typeof manualEmailRaw === 'string' && manualEmailRaw.trim().length > 0
+          ? manualEmailRaw.trim().toLowerCase()
+          : null;
+      const normalizedFirstName =
+        typeof bodyFirstName === 'string' && bodyFirstName.trim().length > 0
+          ? bodyFirstName.trim()
+          : null;
+      const normalizedLastName =
+        typeof bodyLastName === 'string' && bodyLastName.trim().length > 0
+          ? bodyLastName.trim()
+          : null;
+      const relayEmailFromApple = isPrivateRelayEmail(email) ? email.toLowerCase().trim() : null;
+      const resolvedEmail =
+        provider === 'apple'
+          ? (manualEmail || (relayEmailFromApple ? null : (email ? String(email).toLowerCase().trim() : null)))
+          : (email ? String(email).toLowerCase().trim() : null);
+
+      if (provider === 'apple' && !resolvedEmail) {
+        return res.status(400).json({
+          error: 'Apple did not provide your email. Please enter a valid email to continue.',
+          requiresEmailInput: true,
+          code: 'APPLE_EMAIL_REQUIRED',
+        });
+      }
       
       // Log decoded token for debugging
       console.log('Decoded token:', {
@@ -316,13 +412,30 @@ class AuthController {
       if (!email && provider === 'apple') {
         // Apple user without email - use providerId to find user
         const appleUser = await User.findOne({ 
-          providerId: providerId, 
-          provider: 'apple' 
+          $or: [
+            { appleUserId },
+            { providerId: providerId, provider: 'apple' },
+          ],
         });
         
         if (appleUser) {
           // Existing Apple user without email
           appleUser.lastLogin = new Date();
+          appleUser.appleUserId = appleUserId;
+          if (normalizedFirstName && (!appleUser.firstName || appleUser.firstName === 'User')) {
+            appleUser.firstName = normalizedFirstName;
+          }
+          if (normalizedLastName && (!appleUser.lastName || appleUser.lastName === 'User')) {
+            appleUser.lastName = normalizedLastName;
+          }
+          if (resolvedEmail && (!appleUser.email || appleUser.isPrivateRelay)) {
+            appleUser.email = resolvedEmail;
+            appleUser.isPrivateRelay = false;
+          }
+          if (relayEmailFromApple) {
+            appleUser.appleRelayEmail = relayEmailFromApple;
+            if (!resolvedEmail) appleUser.isPrivateRelay = true;
+          }
           await appleUser.save();
           
           const accessToken = jwt.sign(
@@ -371,16 +484,22 @@ class AuthController {
       if (!email && provider === 'apple') {
         // Apple user without email - only check by providerId
         user = await User.findOne({ 
-          providerId: providerId, 
-          provider: provider 
+          $or: [
+            { appleUserId },
+            { providerId: providerId, provider: provider },
+          ],
         });
       } else {
         // User with email or non-Apple provider - check by email or providerId
-        user = await User.findOne({ 
-          $or: [
-            email ? { email: email } : {},
-            { providerId: providerId, provider: provider }
-          ].filter(condition => Object.keys(condition).length > 0) // Remove empty objects
+        const lookups = [
+          resolvedEmail ? { email: resolvedEmail } : null,
+          { providerId: providerId, provider: provider },
+        ];
+        if (provider === 'apple' && appleUserId) {
+          lookups.push({ appleUserId });
+        }
+        user = await User.findOne({
+          $or: lookups.filter(Boolean),
         });
       }
 
@@ -389,7 +508,26 @@ class AuthController {
         user.lastLogin = new Date();
         user.provider = provider;
         user.providerId = providerId;
+        if (provider === 'apple') {
+          user.appleUserId = appleUserId;
+        }
         user.emailVerified = provider === 'google' ? true : (user.emailVerified || false);
+        // Apple only provides full name on first consent; persist client-provided names
+        // when profile still has placeholders.
+        if (normalizedFirstName && (!user.firstName || user.firstName === 'User')) {
+          user.firstName = normalizedFirstName;
+        }
+        if (normalizedLastName && (!user.lastName || user.lastName === 'User')) {
+          user.lastName = normalizedLastName;
+        }
+        if (resolvedEmail && (!user.email || user.isPrivateRelay)) {
+          user.email = resolvedEmail;
+          user.isPrivateRelay = false;
+        }
+        if (relayEmailFromApple) {
+          user.appleRelayEmail = relayEmailFromApple;
+          if (!resolvedEmail) user.isPrivateRelay = true;
+        }
         
         // Update profile picture if not set
         if (!user.profilePicture && picture) {
@@ -467,9 +605,7 @@ class AuthController {
       }
 
       // Fallback email for Apple users if none is provided (helps avoid validation issues)
-      const effectiveEmail = email || (provider === 'apple' && providerId
-        ? `${providerId}@appleuser.noreply`
-        : undefined);
+      const effectiveEmail = resolvedEmail || relayEmailFromApple;
 
       user = new User({
         email: effectiveEmail,
@@ -478,6 +614,9 @@ class AuthController {
         role,
         provider: provider,
         providerId,
+        appleUserId: provider === 'apple' ? appleUserId : undefined,
+        appleRelayEmail: relayEmailFromApple || undefined,
+        isPrivateRelay: provider === 'apple' ? Boolean(!resolvedEmail && relayEmailFromApple) : false,
         emailVerified: provider === 'google' ? true : (effectiveEmail ? true : false),
         profilePicture: picture || undefined,
         isActive: true

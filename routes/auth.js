@@ -1,6 +1,9 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const RefreshToken = require('../models/RefreshToken');
+const AuthController = require('../controllers/authController');
+const { authenticateToken } = require('../middleware/auth');
+const { validate, authSchemas } = require('../middleware/validation');
 const {
   tokenHash,
   signAccessToken,
@@ -9,6 +12,22 @@ const {
 } = require('../utils/tokenService');
 
 const router = express.Router();
+
+// Core auth endpoints used by Flutter app
+router.post('/register', validate(authSchemas.register), AuthController.register);
+router.post('/login', validate(authSchemas.login), AuthController.login);
+router.post('/google', validate(authSchemas.googleAuth), AuthController.googleAuth);
+router.post(
+  '/verify-google-token',
+  validate(authSchemas.verifyGoogleToken),
+  AuthController.verifyGoogleToken
+);
+router.get('/profile', authenticateToken, AuthController.getProfile);
+router.put('/profile', authenticateToken, AuthController.updateProfile);
+router.put('/fcm-token', authenticateToken, AuthController.updateFcmToken);
+router.delete('/fcm-token', authenticateToken, AuthController.removeFcmToken);
+router.post('/test-firebase-config', AuthController.testFirebaseConfig);
+router.post('/test-firebase-token', AuthController.testFirebaseToken);
 
 /**
  * POST /api/auth/refresh-token

@@ -29,6 +29,20 @@ const userSchema = new mongoose.Schema({
     type: String, // Google/Facebook user ID
     sparse: true
   },
+  appleUserId: {
+    type: String,
+    sparse: true,
+    unique: true
+  },
+  appleRelayEmail: {
+    type: String,
+    lowercase: true,
+    trim: true
+  },
+  isPrivateRelay: {
+    type: Boolean,
+    default: false
+  },
   emailVerified: {
     type: Boolean,
     default: false
