@@ -1,3 +1,4 @@
+const { Blob, File } = require('buffer');
 const dns = require('dns');
 const express = require('express');
 const mongoose = require('mongoose');
@@ -7,6 +8,14 @@ const rateLimit = require('express-rate-limit');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
+
+// Node 18 compatibility: some transitive deps (e.g. undici) expect global File/Blob.
+if (typeof globalThis.Blob === 'undefined') {
+  globalThis.Blob = Blob;
+}
+if (typeof globalThis.File === 'undefined') {
+  globalThis.File = File;
+}
 
 // Helps some networks where IPv6/SRV resolution misbehaves (does not fix invalid cluster hostnames).
 dns.setDefaultResultOrder('ipv4first');
