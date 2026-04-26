@@ -225,6 +225,8 @@ class PatientController {
         priority,
         startDate,
         endDate,
+        status,
+        isActive,
       } = req.body;
 
       const pm = await PatientMedication.findOne({ _id: id, patientId: req.user._id }).populate('medicationId');
@@ -287,6 +289,13 @@ class PatientController {
             description: (description && String(description).trim()) || catalogRef.description || '',
           });
         }
+      }
+
+      if (status !== undefined && ['active', 'paused', 'stopped', 'completed'].includes(status)) {
+        pm.status = status;
+      }
+      if (isActive !== undefined) {
+        pm.isActive = Boolean(isActive);
       }
 
       await pm.save();
@@ -517,6 +526,101 @@ class PatientController {
     } catch (error) {
       console.error('Get symptoms error:', error);
       res.status(500).json({ error: 'Failed to get symptoms' });
+    }
+  }
+
+  static async getSymptomById(req, res) {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: 'Invalid symptom ID' });
+      }
+      const symptom = await Symptom.findOne({ _id: id, patientId: req.user._id })
+        .populate('patientMedicationId')
+        .populate('doctorId', 'firstName lastName');
+      if (!symptom) {
+        return res.status(404).json({ error: 'Symptom not found' });
+      }
+      res.json({ message: 'Symptom retrieved successfully', symptom });
+    } catch (error) {
+      console.error('Get symptom by id error:', error);
+      res.status(500).json({ error: 'Failed to get symptom' });
+    }
+  }
+
+  static async updateSymptom(req, res) {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: 'Invalid symptom ID' });
+      }
+      const symptom = await Symptom.findOne({ _id: id, patientId: req.user._id });
+      if (!symptom) {
+        return res.status(404).json({ error: 'Symptom not found' });
+      }
+
+      const {
+        patientMedicationId,
+        name,
+        description,
+        severity,
+        category,
+        duration,
+        isResolved
+      } = req.body;
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'patientMedicationId')) {
+        if (patientMedicationId && !mongoose.Types.ObjectId.isValid(patientMedicationId)) {
+          return res.status(400).json({ error: 'Invalid medication ID format' });
+        }
+        const med = patientMedicationId
+          ? await PatientMedication.findOne({ _id: patientMedicationId, patientId: req.user._id })
+          : null;
+        if (patientMedicationId && !med) {
+          return res.status(404).json({ error: 'Medication not found' });
+        }
+        symptom.patientMedicationId = patientMedicationId || null;
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'name')) symptom.name = name;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'description')) symptom.description = description;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'severity')) symptom.severity = severity;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'category')) symptom.category = category;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'duration')) symptom.duration = duration;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'isResolved')) {
+        symptom.isResolved = Boolean(isResolved);
+        if (symptom.isResolved) {
+          symptom.resolvedDate = new Date();
+        } else {
+          symptom.resolvedDate = null;
+        }
+      }
+
+      await symptom.save();
+      const updated = await Symptom.findById(symptom._id)
+        .populate('patientMedicationId')
+        .populate('doctorId', 'firstName lastName');
+
+      res.json({ message: 'Symptom updated successfully', symptom: updated });
+    } catch (error) {
+      console.error('Update symptom error:', error);
+      res.status(500).json({ error: 'Failed to update symptom' });
+    }
+  }
+
+  static async deleteSymptom(req, res) {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: 'Invalid symptom ID' });
+      }
+      const result = await Symptom.deleteOne({ _id: id, patientId: req.user._id });
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ error: 'Symptom not found' });
+      }
+      res.json({ message: 'Symptom deleted successfully', success: true });
+    } catch (error) {
+      console.error('Delete symptom error:', error);
+      res.status(500).json({ error: 'Failed to delete symptom' });
     }
   }
 

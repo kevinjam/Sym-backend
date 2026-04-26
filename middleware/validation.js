@@ -106,7 +106,9 @@ const mobilePatientMedicationCreate = Joi.object({
   dosageForm: Joi.string().valid('tablet', 'capsule', 'liquid', 'injection', 'inhaler', 'cream', 'other').allow(null).optional(),
   priority: Joi.string().valid('low', 'medium', 'high', 'critical').allow(null).optional(),
   startDate: Joi.date().optional().allow(null),
-  endDate: Joi.date().optional().allow(null)
+  endDate: Joi.date().optional().allow(null),
+  status: Joi.string().valid('active', 'paused', 'stopped', 'completed').allow(null).optional(),
+  isActive: Joi.boolean().allow(null).optional()
 });
 
 const medicationSchemas = {
@@ -195,7 +197,19 @@ const symptomSchemas = {
       'dermatological', 'musculoskeletal', 'psychological', 'other'
     ).optional(),
     duration: Joi.string().valid('minutes', 'hours', 'days', 'weeks', 'months').optional()
-  })
+  }),
+  update: Joi.object({
+    patientMedicationId: Joi.string().allow(null, '').optional(),
+    name: Joi.string().min(2).max(100).optional(),
+    description: Joi.string().max(500).allow('', null).optional(),
+    severity: Joi.string().valid('mild', 'moderate', 'severe').optional(),
+    category: Joi.string().valid(
+      'gastrointestinal', 'cardiovascular', 'respiratory', 'neurological',
+      'dermatological', 'musculoskeletal', 'psychological', 'other'
+    ).allow(null).optional(),
+    duration: Joi.string().valid('minutes', 'hours', 'days', 'weeks', 'months').allow(null).optional(),
+    isResolved: Joi.boolean().optional()
+  }).min(1)
 };
 
 // Notification validation schemas

@@ -234,6 +234,10 @@ router.post('/symptoms', validate(symptomSchemas.create), PatientController.repo
  */
 router.get('/symptoms', PatientController.getSymptoms);
 
+router.get('/symptoms/:id', PatientController.getSymptomById);
+router.put('/symptoms/:id', validate(symptomSchemas.update), PatientController.updateSymptom);
+router.delete('/symptoms/:id', PatientController.deleteSymptom);
+
 /**
  * @swagger
  * /api/patient/adherence:
