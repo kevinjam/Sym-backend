@@ -36,7 +36,16 @@ router.post('/test-firebase-token', AuthController.testFirebaseToken);
  */
 router.post(['/refresh-token', '/refresh'], async (req, res) => {
   try {
-    const refreshToken = req.body?.refreshToken;
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    const bearerToken =
+      typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+        ? authHeader.substring('Bearer '.length).trim()
+        : null;
+    const refreshToken =
+      req.body?.refreshToken ||
+      req.body?.token ||
+      req.cookies?.refreshToken ||
+      bearerToken;
     if (!refreshToken || typeof refreshToken !== 'string') {
       return res.status(400).json({ error: 'refreshToken is required' });
     }

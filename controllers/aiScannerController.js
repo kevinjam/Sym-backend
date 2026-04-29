@@ -619,27 +619,25 @@ const callAIProvider = async (providerName, config, images, prompt) => {
  * Call OpenRouter API
  */
 const callOpenRouter = async (config, images, prompt) => {
-  // Prefer Gemini vision-capable models
-  const models = [
-    'google/gemini-2.0-flash-exp:free',
-    'google/gemini-1.5-flash:free'
-  ];
+  // Prefer model IDs that are currently active on OpenRouter.
+  // Can be overridden via OPENROUTER_MODELS="model-a,model-b,..."
+  const models = (
+    process.env.OPENROUTER_MODELS ||
+    'google/gemini-2.0-flash-001,google/gemini-1.5-flash,meta-llama/llama-3.2-11b-vision-instruct,qwen/qwen2.5-vl-72b-instruct'
+  )
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+
+  if (!models.length) {
+    throw new Error('No OpenRouter models configured');
+  }
 
   // Try multiple payload formats for compatibility
   const buildPayloads = (model) => {
     const dataUrls = images.map(({ base64, mimeType }) => `data:${mimeType};base64,${base64}`);
-    const structuredContent = [
-      { type: 'input_text', text: prompt },
-      ...dataUrls.flatMap((dataUrl, index) => ([
-        {
-          type: 'input_text',
-          text: `Image ${index + 1}${index === 0 ? ' (front label / product name)' : ' (back label / ingredients and warnings)'}`
-        },
-        { type: 'input_image', image_url: dataUrl }
-      ]))
-    ];
 
-    const fallbackContent = [
+    const openAiVisionContent = [
       { type: 'text', text: prompt },
       ...dataUrls.flatMap((dataUrl, index) => ([
         {
@@ -650,26 +648,36 @@ const callOpenRouter = async (config, images, prompt) => {
       ]))
     ];
 
+    // Some OpenRouter models accept image_url as plain string.
+    const legacyVisionContent = [
+      { type: 'text', text: prompt },
+      ...dataUrls.flatMap((dataUrl, index) => ([
+        {
+          type: 'text',
+          text: `Image ${index + 1}${index === 0 ? ' (front label / product name)' : ' (back label / ingredients and warnings)'}`
+        },
+        { type: 'image_url', image_url: dataUrl }
+      ]))
+    ];
+
     return [
-      // Gemini-style structured content
       {
         model,
         messages: [
           {
             role: 'user',
-            content: structuredContent
+            content: openAiVisionContent
           }
         ],
         max_tokens: 2000,
         temperature: 0.1
       },
-      // OpenAI-style content as fallback
       {
         model,
         messages: [
           {
             role: 'user',
-            content: fallbackContent
+            content: legacyVisionContent
           }
         ],
         max_tokens: 2000,
@@ -704,7 +712,17 @@ const callOpenRouter = async (config, images, prompt) => {
           };
         }
       } catch (error) {
-        console.log(`🤖 [AI_SCANNER] OpenRouter attempt failed (model=${model}):`, error.response?.status, error.message);
+        const status = error.response?.status;
+        const message =
+          error.response?.data?.error?.message ||
+          error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message;
+        console.log(
+          `🤖 [AI_SCANNER] OpenRouter attempt failed (model=${model}):`,
+          status,
+          message
+        );
         if (error.response?.status === 429) {
           await new Promise(resolve => setTimeout(resolve, 1500));
         }

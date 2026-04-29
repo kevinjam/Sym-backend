@@ -204,30 +204,47 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Database connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sym_medication_app', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => {
-  console.log('Connected to MongoDB');
-})
-.catch((err) => {
-  console.error('MongoDB connection error:', err);
-  if (err.code === 'ENOTFOUND' || String(err.message || '').includes('querySrv')) {
-    console.error(
-      '\nMongoDB SRV lookup failed (ENOTFOUND). The hostname in MONGODB_URI is not in DNS — ' +
-      'common causes: cluster deleted/renamed, wrong Atlas project, or an old copied URI.\n' +
-      'Fix: Atlas → Database → Connect → Drivers → copy the current string into MONGODB_URI. ' +
-      'If SRV is blocked on your network, use the standard mongodb://… connection string from the same screen.\n'
-    );
+const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/sym_medication_app';
+
+// Disable Mongoose buffering so requests fail fast instead of timing out when DB is disconnected.
+mongoose.set('bufferCommands', false);
+
+async function startServer() {
+  try {
+    await mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    });
+
+    console.log('Connected to MongoDB');
+
+    const PORT = process.env.PORT || 9000;
+    server.listen(PORT, () => {
+      console.log(`🚀 SYM Backend server running on port ${PORT}`);
+      console.log(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
+    });
+  } catch (err) {
+    console.error('MongoDB connection error:', err);
+    if (err.code === 'ENOTFOUND' || String(err.message || '').includes('querySrv')) {
+      console.error(
+        '\nMongoDB SRV lookup failed (ENOTFOUND). The hostname in MONGODB_URI is not in DNS — ' +
+          'common causes: cluster deleted/renamed, wrong Atlas project, or an old copied URI.\n' +
+          'Fix: Atlas → Database → Connect → Drivers → copy the current string into MONGODB_URI. ' +
+          'If SRV is blocked on your network, use the standard mongodb://… connection string from the same screen.\n'
+      );
+    }
+    process.exit(1);
   }
+}
+
+mongoose.connection.on('disconnected', () => {
+  console.error('MongoDB disconnected');
 });
 
-const PORT = process.env.PORT || 9000;
-server.listen(PORT, () => {
-  console.log(`🚀 SYM Backend server running on port ${PORT}`);
-  console.log(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
+mongoose.connection.on('error', (error) => {
+  console.error('MongoDB runtime error:', error);
 });
+
+startServer();
 
 module.exports = { app, server, io }; 

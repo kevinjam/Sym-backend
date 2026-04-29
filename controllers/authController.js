@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { admin } = require('../config/firebase');
 const User = require('../models/User');
+const { issueTokenPair } = require('../utils/tokenService');
 const googleOAuthClient = new OAuth2Client();
 const isPrivateRelayEmail = (email) =>
   typeof email === 'string' &&
@@ -95,27 +96,15 @@ class AuthController {
 
       await user.save();
 
-      // Generate JWT tokens
-      const accessToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
-      );
-
-      const refreshToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
-      );
+      const token = await issueTokenPair({
+        userId: String(user._id),
+        role: user.role,
+        email: user.email,
+      });
 
       res.status(201).json({
         message: 'User registered successfully',
-        token: {
-          accessToken,
-          refreshToken,
-          tokenType: 'Bearer',
-          expiresIn: 3600 // 1 hour in seconds
-        },
+        token,
         user: {
           id: user._id,
           email: user.email,
@@ -157,27 +146,15 @@ class AuthController {
       user.lastLogin = new Date();
       await user.save();
 
-      // Generate JWT tokens
-      const accessToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
-      );
-
-      const refreshToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
-      );
+      const token = await issueTokenPair({
+        userId: String(user._id),
+        role: user.role,
+        email: user.email,
+      });
 
       res.json({
         message: 'Login successful',
-        token: {
-          accessToken,
-          refreshToken,
-          tokenType: 'Bearer',
-          expiresIn: 3600 // 1 hour in seconds
-        },
+        token,
         user: {
           id: user._id,
           email: user.email,
@@ -255,28 +232,15 @@ class AuthController {
         return res.status(401).json({ error: 'User not found' });
       }
 
-      // Generate new access token
-      const accessToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
-      );
-
-      // Generate new refresh token
-      const newRefreshToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
-      );
+      const token = await issueTokenPair({
+        userId: String(user._id),
+        role: user.role,
+        email: user.email,
+      });
 
       res.json({
         message: 'Token refreshed successfully',
-        token: {
-          accessToken,
-          refreshToken: newRefreshToken,
-          tokenType: 'Bearer',
-          expiresIn: 3600 // 1 hour in seconds
-        }
+        token,
       });
     } catch (error) {
       console.error('Token refresh error:', error);
@@ -438,26 +402,17 @@ class AuthController {
           }
           await appleUser.save();
           
-          const accessToken = jwt.sign(
-            { userId: appleUser._id, role: appleUser.role },
-            process.env.JWT_SECRET,
-            { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
-          );
-
-          const refreshToken = jwt.sign(
-            { userId: appleUser._id, role: appleUser.role },
-            process.env.JWT_SECRET,
-            { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
-          );
+          const token = await issueTokenPair({
+            userId: String(appleUser._id),
+            role: appleUser.role,
+            email: appleUser.email,
+          });
 
           return res.json({
             message: 'Apple login successful',
             token: {
-              accessToken,
-              refreshToken,
-              tokenType: 'Bearer',
-              expiresIn: 3600,
-              isNewUser: false
+              ...token,
+              isNewUser: false,
             },
             user: {
               id: appleUser._id,
@@ -536,27 +491,17 @@ class AuthController {
         
         await user.save();
 
-        // Generate JWT tokens
-        const accessToken = jwt.sign(
-          { userId: user._id, role: user.role },
-          process.env.JWT_SECRET,
-          { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
-        );
-
-        const refreshToken = jwt.sign(
-          { userId: user._id, role: user.role },
-          process.env.JWT_SECRET,
-          { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
-        );
+        const token = await issueTokenPair({
+          userId: String(user._id),
+          role: user.role,
+          email: user.email,
+        });
 
         return res.json({
           message: `${provider === 'apple' ? 'Apple' : 'Google'} login successful`,
           token: {
-            accessToken,
-            refreshToken,
-            tokenType: 'Bearer',
-            expiresIn: 3600,
-            isNewUser: false
+            ...token,
+            isNewUser: false,
           },
           user: {
             id: user._id,
@@ -624,27 +569,17 @@ class AuthController {
 
       await user.save();
 
-      // Generate JWT tokens
-      const accessToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '1h' }
-      );
-
-      const refreshToken = jwt.sign(
-        { userId: user._id, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
-      );
+      const token = await issueTokenPair({
+        userId: String(user._id),
+        role: user.role,
+        email: user.email,
+      });
 
       res.status(201).json({
         message: `${provider === 'apple' ? 'Apple' : 'Google'} signup successful`,
         token: {
-          accessToken,
-          refreshToken,
-          tokenType: 'Bearer',
-          expiresIn: 3600,
-          isNewUser: true
+          ...token,
+          isNewUser: true,
         },
         user: {
           id: user._id,
