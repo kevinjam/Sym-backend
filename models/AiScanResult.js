@@ -94,6 +94,17 @@ const aiScanResultSchema = new mongoose.Schema({
     trim: true,
     maxlength: 1000
   },
+  // Label Scanner → Describe tab: structured markdown (no URLs); optional for image-only scans
+  describeSummaryMarkdown: {
+    type: String,
+    trim: true,
+    maxlength: 20000
+  },
+  describeFullMarkdown: {
+    type: String,
+    trim: true,
+    maxlength: 48000
+  },
   scannedAt: {
     type: Date,
     default: Date.now,
@@ -170,7 +181,13 @@ aiScanResultSchema.pre('save', function(next) {
   if (this.manufacturer) this.manufacturer = this.manufacturer.trim();
   if (this.warnings) this.warnings = this.warnings.trim();
   if (this.interactions) this.interactions = this.interactions.trim();
-  
+  if (this.describeSummaryMarkdown) {
+    this.describeSummaryMarkdown = this.describeSummaryMarkdown.trim();
+  }
+  if (this.describeFullMarkdown) {
+    this.describeFullMarkdown = this.describeFullMarkdown.trim();
+  }
+
   next();
 });
 

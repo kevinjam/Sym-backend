@@ -1,0 +1,98 @@
+# Deploy Node backend over SSH to AWS (EC2 or similar).
+#
+# Required GitHub secrets:
+#   SSH_PRIVATE_KEY   — PEM/OpenSSH private key for deploy user (full multiline key)
+#   SERVER_IP         — Public IP or DNS of the app host
+#   SERVER_USER       — SSH user (e.g. ubuntu, ec2-user, deploy)
+#
+# Optional repository variable:
+#   BACKEND_DEPLOY_PATH — Absolute app directory on the server (default: /var/www/sym-backend)
+
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: sym-backend-aws
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: SSH deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_IP }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_PRIVATE_KEY}" ] || [ -z "${SERVER_HOST}" ]; then
+            echo "::error::SSH_PRIVATE_KEY and SERVER_IP secrets must be set."
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/sym-deploy
+          chmod 600 ~/.ssh/sym-deploy
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy on server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_IP }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ vars.BACKEND_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVER_USER:-}" ]; then
+            echo "::error::SERVER_USER secret must be set."
+            exit 1
+          fi
+          REMOTE_PATH="${DEPLOY_PATH:-/var/www/sym-backend}"
+
+          ssh -i ~/.ssh/sym-deploy \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            bash -s <<REMOTE_EOF
+          set -euo pipefail
+          APP_NAME="sym-backend"
+          cd "${REMOTE_PATH}"
+
+          echo ">>> Deploy directory: \$(pwd)"
+
+          echo ">>> Git sync"
+          git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+
+          echo ">>> Dependencies (production)"
+          if [ -f package-lock.json ]; then
+            npm ci --omit=dev
+          else
+            npm install --production
+          fi
+
+          echo ">>> PM2"
+          if pm2 describe "\${APP_NAME}" >/dev/null 2>&1; then
+            pm2 reload "\${APP_NAME}" --update-env
+          elif [ -f ecosystem.config.cjs ]; then
+            pm2 start ecosystem.config.cjs
+          elif [ -f ecosystem.config.js ]; then
+            pm2 start ecosystem.config.js
+          else
+            pm2 start server.js --name "\${APP_NAME}"
+          fi
+
+          pm2 save
+          echo ">>> Done"
+          REMOTE_EOF

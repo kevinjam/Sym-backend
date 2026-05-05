@@ -7,6 +7,20 @@ yarn-error.log*
 # Environment variables
 .env
 .env.local
+.env.*.local
+*.env
+!.env.example
+
+# SSH / deploy keys and crypto material (never commit)
+/sym
+/sym.pub
+/.sym.pub
+*.pem
+id_rsa
+id_ed25519
+id_ecdsa
+*.p12
+*.pfx
 .env.development.local
 .env.test.local
 .env.production.local
@@ -113,6 +127,9 @@ firebase-debug.*.log
 
 # MongoDB
 *.lock
+
+# Markdown — local docs only (not for production git history)
+*.md
 
 # IDE
 .vscode/

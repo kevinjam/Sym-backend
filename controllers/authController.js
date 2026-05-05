@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { admin } = require('../config/firebase');
 const User = require('../models/User');
+const { formatAuthUser } = require('../utils/formatAuthUser');
 const { issueTokenPair } = require('../utils/tokenService');
 const googleOAuthClient = new OAuth2Client();
 const isPrivateRelayEmail = (email) =>
@@ -105,14 +106,7 @@ class AuthController {
       res.status(201).json({
         message: 'User registered successfully',
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          fullName: user.fullName
-        }
+        user: formatAuthUser(user),
       });
     } catch (error) {
       console.error('Registration error:', error);
@@ -155,14 +149,7 @@ class AuthController {
       res.json({
         message: 'Login successful',
         token,
-        user: {
-          id: user._id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          fullName: user.fullName
-        }
+        user: formatAuthUser(user),
       });
     } catch (error) {
       console.error('Login error:', error);
@@ -174,7 +161,7 @@ class AuthController {
   static async getProfile(req, res) {
     try {
       const user = await User.findById(req.user._id).select('-password');
-      res.json({ user });
+      res.json({ user: formatAuthUser(user) });
     } catch (error) {
       console.error('Profile error:', error);
       res.status(500).json({ error: 'Failed to get profile' });
@@ -201,7 +188,7 @@ class AuthController {
 
       res.json({
         message: 'Profile updated successfully',
-        user
+        user: formatAuthUser(user),
       });
     } catch (error) {
       console.error('Profile update error:', error);
@@ -310,7 +297,9 @@ class AuthController {
       }
 
       if (!role || !['patient', 'doctor'].includes(role)) {
-        return res.status(400).json({ error: 'Valid role (patient or doctor) is required' });
+        return res.status(400).json({
+          error: 'Valid role is required: "patient" (app user) or "doctor".',
+        });
       }
 
       // Verify token with Firebase first; if token is a pure Google ID token,
@@ -414,16 +403,7 @@ class AuthController {
               ...token,
               isNewUser: false,
             },
-            user: {
-              id: appleUser._id,
-              email: appleUser.email,
-              firstName: appleUser.firstName,
-              lastName: appleUser.lastName,
-              role: appleUser.role,
-              fullName: appleUser.fullName,
-              profilePicture: appleUser.profilePicture,
-              provider: appleUser.provider
-            }
+            user: formatAuthUser(appleUser),
           });
         } else {
           // New Apple user without email - this is OK now, we'll create them below
@@ -503,16 +483,7 @@ class AuthController {
             ...token,
             isNewUser: false,
           },
-          user: {
-            id: user._id,
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            role: user.role,
-            fullName: user.fullName,
-            profilePicture: user.profilePicture,
-            provider: user.provider
-          }
+          user: formatAuthUser(user),
         });
       }
 
@@ -581,16 +552,7 @@ class AuthController {
           ...token,
           isNewUser: true,
         },
-        user: {
-          id: user._id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          fullName: user.fullName,
-          profilePicture: user.profilePicture,
-          provider: user.provider
-        }
+        user: formatAuthUser(user),
       });
 
     } catch (error) {

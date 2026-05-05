@@ -249,6 +249,8 @@ const scanMedicationOrSupplement = async (req, res) => {
       manufacturer: aiResult.manufacturer,
       warnings: aiResult.warnings,
       interactions: aiResult.interactions,
+      describeSummaryMarkdown: aiResult.describeSummaryMarkdown || undefined,
+      describeFullMarkdown: aiResult.describeFullMarkdown || undefined,
       scannedAt: new Date(),
       aiProvider: aiResult.provider,
       aiModel: aiResult.model,
@@ -261,7 +263,7 @@ const scanMedicationOrSupplement = async (req, res) => {
 
     res.json({
       success: true,
-      data: {
+      data: sanitizeAiScanForApiResponse({
         id: scanResult._id,
         name: scanResult.name,
         category: scanResult.category,
@@ -274,8 +276,10 @@ const scanMedicationOrSupplement = async (req, res) => {
         manufacturer: scanResult.manufacturer,
         warnings: scanResult.warnings,
         interactions: scanResult.interactions,
+        describeSummaryMarkdown: scanResult.describeSummaryMarkdown,
+        describeFullMarkdown: scanResult.describeFullMarkdown,
         scannedAt: scanResult.scannedAt
-      },
+      }),
       meta: {
         imagesAnalyzed: imagePaths.length,
         aiProvider: scanResult.aiProvider,
@@ -390,7 +394,7 @@ const getScanHistory = async (req, res) => {
 
     res.json({
       success: true,
-      data: results,
+      data: results.map((r) => sanitizeAiScanForApiResponse(r)),
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -449,7 +453,7 @@ const getScanResult = async (req, res) => {
 
     res.json({
       success: true,
-      data: scanResult
+      data: sanitizeAiScanForApiResponse(scanResult)
     });
 
   } catch (error) {
@@ -803,6 +807,133 @@ const callOpenAI = async (config, images, prompt) => {
 };
 
 /**
+ * Remove markdown links, angle-bracket URLs, and bare http(s)/ftp/www links from user-facing text.
+ */
+const stripUrlsFromPlainText = (text) => {
+  if (text == null || typeof text !== 'string') return '';
+  let t = text.trim();
+  if (!t) return '';
+  // [label](https://...) -> label
+  t = t.replace(/\[([^\]]*)\]\(\s*(?:https?|ftp|mailto):[^)\s]+\s*\)/gi, '$1');
+  t = t.replace(/\[([^\]]*)\]\(\s*[^)\s]+\s*\)/gi, '$1');
+  // <https://...>
+  t = t.replace(/<\s*(?:https?|ftp):\/\/[^>\s]+>/gi, '');
+  // Bare URLs
+  t = t.replace(/(?:https?|ftp):\/\/[^\s<>"'[\])]+/gi, '');
+  t = t.replace(/\bwww\.[^\s<>"'[\])]+/gi, '');
+  t = t.replace(/\s{2,}/g, ' ').trim();
+  return t;
+};
+
+/** Strip URLs from string fields on a scan payload (API responses / legacy DB rows). */
+const sanitizeAiScanForApiResponse = (scan) => {
+  if (!scan || typeof scan !== 'object') return scan;
+  const o =
+    typeof scan.toObject === 'function'
+      ? scan.toObject({ flattenMaps: true })
+      : { ...scan };
+  for (const key of [
+    'name',
+    'description',
+    'dosage',
+    'manufacturer',
+    'warnings',
+    'interactions',
+    'describeSummaryMarkdown',
+    'describeFullMarkdown'
+  ]) {
+    if (o[key] != null && typeof o[key] === 'string') {
+      o[key] = stripUrlsFromPlainText(o[key]);
+    }
+  }
+  if (Array.isArray(o.benefits)) {
+    o.benefits = o.benefits.map((b) =>
+      typeof b === 'string' ? stripUrlsFromPlainText(b) : b
+    );
+  }
+  if (Array.isArray(o.sideEffects)) {
+    o.sideEffects = o.sideEffects.map((s) =>
+      typeof s === 'string' ? stripUrlsFromPlainText(s) : s
+    );
+  }
+  if (Array.isArray(o.ingredients)) {
+    o.ingredients = o.ingredients.map((ing) => {
+      if (!ing || typeof ing !== 'object') return ing;
+      const next = { ...ing };
+      if (next.name != null) next.name = stripUrlsFromPlainText(String(next.name));
+      if (next.amount != null && typeof next.amount === 'string') {
+        next.amount = stripUrlsFromPlainText(next.amount);
+      }
+      if (next.unit != null && typeof next.unit === 'string') {
+        next.unit = stripUrlsFromPlainText(next.unit);
+      }
+      if (next.purpose != null && typeof next.purpose === 'string') {
+        next.purpose = stripUrlsFromPlainText(next.purpose);
+      }
+      return next;
+    });
+  }
+  return o;
+};
+
+/** Extra markdown for "full analysis" when the model omits a longer body. */
+const formatStructuredLabelAppendix = (parsed) => {
+  const lines = ['\n\n## Label-sourced details\n'];
+  if (parsed.ingredients?.length) {
+    lines.push('**Ingredients:**');
+    parsed.ingredients.forEach((ing) => {
+      const amt = [ing.amount, ing.unit].filter(Boolean).join(' ').trim();
+      lines.push(
+        `- **${ing.name || '—'}:** ${amt || '—'}${ing.purpose ? ` — ${ing.purpose}` : ''}`
+      );
+    });
+  } else {
+    lines.push('_No ingredient list extracted from your notes._');
+  }
+  if (parsed.dosage) lines.push(`\n**Dosage (from notes):** ${parsed.dosage}`);
+  if (parsed.manufacturer) lines.push(`\n**Manufacturer:** ${parsed.manufacturer}`);
+  if (parsed.warnings) {
+    lines.push(`\n\n**Warnings:** ${parsed.warnings}`);
+  }
+  if (parsed.interactions) {
+    lines.push(`\n\n**Interactions:** ${parsed.interactions}`);
+  }
+  return lines.join('\n');
+};
+
+const extractOverviewSummaryFromFullMarkdown = (full) => {
+  if (!full || typeof full !== 'string') return null;
+  const re = /(##\s*Overview[\s\S]*?)(?=\n##\s|$)/i;
+  const m = full.match(re);
+  if (m && m[1] && m[1].trim().length > 12) {
+    return m[1].trim();
+  }
+  const cap = 1400;
+  return full.length <= cap ? full.trim() : `${full.slice(0, cap).trim()}\n\n…`;
+};
+
+const enrichManualDescribeMarkdown = (parsed) => {
+  if (parsed.describeSummaryMarkdown && !parsed.describeFullMarkdown) {
+    parsed.describeFullMarkdown = `${parsed.describeSummaryMarkdown}${formatStructuredLabelAppendix(parsed)}`;
+    return parsed;
+  }
+  if (!parsed.describeSummaryMarkdown && parsed.describeFullMarkdown) {
+    parsed.describeSummaryMarkdown =
+      extractOverviewSummaryFromFullMarkdown(parsed.describeFullMarkdown) ||
+      parsed.describeFullMarkdown;
+    return parsed;
+  }
+  if (
+    parsed.describeSummaryMarkdown &&
+    parsed.describeFullMarkdown &&
+    parsed.describeFullMarkdown.trim() === parsed.describeSummaryMarkdown.trim()
+  ) {
+    parsed.describeFullMarkdown = `${parsed.describeFullMarkdown}${formatStructuredLabelAppendix(parsed)}`;
+  }
+  return parsed;
+};
+
+/**
  * Parse AI response and extract structured data
  */
 const parseAIResponse = (content) => {
@@ -812,14 +943,16 @@ const parseAIResponse = (content) => {
     if (jsonMatch) {
       const aiData = JSON.parse(jsonMatch[0]);
       const sanitizeString = (value) => {
-        if (typeof value === 'string') return value.trim();
-        if (value === null || value === undefined) return '';
-        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        if (typeof value === 'object' && value !== null) {
+        let raw = '';
+        if (typeof value === 'string') raw = value.trim();
+        else if (value === null || value === undefined) raw = '';
+        else if (typeof value === 'number' || typeof value === 'boolean') {
+          raw = String(value);
+        } else if (typeof value === 'object' && value !== null) {
           const textValue = value.text || value.value || value.description;
-          if (textValue) return String(textValue).trim();
+          if (textValue) raw = String(textValue).trim();
         }
-        return '';
+        return stripUrlsFromPlainText(raw);
       };
 
       const sanitizeStringList = (value) => {
@@ -835,12 +968,20 @@ const parseAIResponse = (content) => {
         if (!value) return [];
         if (!Array.isArray(value)) return [];
         return value
-          .map((item) => ({
-            name: sanitizeString(item?.name),
-            amount: sanitizeString(item?.amount),
-            unit: sanitizeString(item?.unit) || undefined,
-            purpose: sanitizeString(item?.purpose) || undefined
-          }))
+          .map((item) => {
+            const name = sanitizeString(item?.name);
+            let amount = sanitizeString(item?.amount);
+            // Mongo ingredient sub-schema requires non-empty amount; models often omit amount for herbs/blends.
+            if (!amount) {
+              amount = '—';
+            }
+            return {
+              name,
+              amount,
+              unit: sanitizeString(item?.unit) || undefined,
+              purpose: sanitizeString(item?.purpose) || undefined
+            };
+          })
           .filter((item) => item.name);
       };
 
@@ -851,8 +992,22 @@ const parseAIResponse = (content) => {
         if (Number.isNaN(numeric)) return 0.5;
         return Math.min(1, Math.max(0, numeric));
       };
-      
-      return {
+
+      /** Address the app user as "you" in warnings (not clinical "patient"). */
+      const normalizeWarningsVoice = (text) => {
+        if (!text || typeof text !== 'string') return text;
+        return text
+          .replace(/\b[Tt]he patient should\b/g, 'You should')
+          .replace(/\b[Pp]atient should\b/g, 'You should')
+          .replace(/\b[Pp]atients should\b/g, 'You should');
+      };
+
+      const warningsRaw = sanitizeString(aiData.warnings) || null;
+
+      const describeSummaryMarkdown = sanitizeString(aiData.describeSummaryMarkdown) || null;
+      const describeFullMarkdown = sanitizeString(aiData.describeFullMarkdown) || null;
+
+      const parsed = {
         name: sanitizeString(aiData.name) || 'Unknown Product',
         category: sanitizeString(aiData.category) || 'supplement',
         description: sanitizeString(aiData.description) || 'No description available',
@@ -862,9 +1017,14 @@ const parseAIResponse = (content) => {
         confidence: clampConfidence(aiData.confidence),
         dosage: sanitizeString(aiData.dosage) || null,
         manufacturer: sanitizeString(aiData.manufacturer) || null,
-        warnings: sanitizeString(aiData.warnings) || null,
-        interactions: sanitizeString(aiData.interactions) || null
+        warnings: warningsRaw ? normalizeWarningsVoice(warningsRaw) : null,
+        interactions: sanitizeString(aiData.interactions) || null,
+        describeSummaryMarkdown,
+        describeFullMarkdown
       };
+
+      enrichManualDescribeMarkdown(parsed);
+      return parsed;
     }
   } catch (error) {
     console.error('🤖 [AI_SCANNER] Error parsing AI response:', error);
@@ -1005,11 +1165,11 @@ const getAnalysisPrompt = (imageCount = 1) => {
     }
   ],
   "benefits": ["Benefit 1", "Benefit 2"],
-  "sideEffects": ["Side effect 1", "Side effect 2"],
+  "sideEffects": ["At least FOUR distinct, plausible side effects or common tolerability issues — use label text when present, otherwise typical class effects phrased cautiously"],
   "dosage": "Recommended dosage instructions",
   "manufacturer": "Manufacturer name if visible",
-  "warnings": "Important warnings or precautions",
-  "interactions": "Drug interactions if any",
+  "warnings": "Important warnings addressing the reader as you/your (never 'the patient'); e.g. You should…",
+  "interactions": "At least TWO distinct interaction or co-use risks, clearly separated (e.g. one per line starting with • ). If the label is silent, give cautious, common-sense class-typical cautions without inventing specific drug names not on the label.",
   "confidence": 0.95
 }
 
@@ -1018,8 +1178,12 @@ Focus on:
 - Extracting active ingredients and their amounts
 - Providing health benefits and potential side effects
 - Including dosage instructions
-- Any warnings or interactions
+- Any warnings or interactions (use second person: you/your, not "patient")
 - Confidence level (0.0 to 1.0) based on image clarity and text readability
+
+Hard minimums:
+- sideEffects array: **minimum 4** separate strings (not duplicates).
+- interactions string: **minimum 2** distinct points (separate lines or • bullets).
 
 If you cannot clearly identify the product, set confidence to a lower value and explain what is missing. Ensure arrays contain concise bullet-style strings.`;
 };
@@ -1091,8 +1255,316 @@ const testAIScanner = async (req, res) => {
   }
 };
 
+const MANUAL_ENTRY_IMAGE_PLACEHOLDER = 'manual-entry';
+
+const getManualAnalysisPrompt = () => {
+  return `You are a medical information assistant in a mobile app (Label Scanner → Describe). The user typed product or supplement notes — there is no photo. Use only their text; infer cautiously when information is missing; lower confidence when uncertain.
+
+Return ONLY valid JSON (no markdown code fences). Escape newlines inside strings as \\n.
+
+Required keys and shapes:
+{
+  "name": "string — concise product name",
+  "category": "medication" or "supplement" only,
+  "description": "Plain text 2–4 short sentences for the top card: what it is, what is known vs uncertain. No URLs. No markdown # headings in this field.",
+  "ingredients": [ { "name": "", "amount": "", "unit": "optional", "purpose": "optional" } ],
+  "benefits": ["short bullets for storage — align with Recommendations"],
+  "sideEffects": ["minimum FOUR short bullets — align with Common Side Effects in markdown; label-consistent or typical-class cautions if notes are sparse"],
+  "dosage": "string or null",
+  "manufacturer": "string or null",
+  "warnings": "string or null — second person you/your; no URLs",
+  "interactions": "string or null — no URLs; must contain at least TWO distinct interaction or risk points (separate lines or lines starting with • )",
+  "confidence": 0.0 to 1.0,
+  "describeSummaryMarkdown": "string — COMPACT markdown for the in-app summary panel",
+  "describeFullMarkdown": "string — EXPANDED markdown for 'View full analysis'; must be clearly longer and more detailed than describeSummaryMarkdown (never a duplicate paste)"
+}
+
+describeSummaryMarkdown and describeFullMarkdown MUST both be present and use these ## headings in this exact order:
+## Overview
+## Common Side Effects
+## Potential Risks & Interactions
+## Who should be careful
+## Recommendations
+## When to seek medical help
+
+Formatting rules for both markdown strings:
+- Under each heading except Overview: use bullet lines. Prefer lines like: * **Drowsiness:** short explanation (bold label, then text).
+- Keep paragraphs to at most 2–3 short lines; mobile-scannable.
+- describeSummaryMarkdown: shorter bullets and fewer lines per section.
+- describeFullMarkdown: materially expand each section with more bullets and deeper explanations; do not merely repeat the summary.
+- Absolutely NO http(s) or ftp links, NO URLs, no "read more", no footnotes, no bracketed citation numbers like [1], no external source names as references.
+
+Minimum depth (do not skip — use cautious, typical-class language when user notes lack detail):
+- Under ## Common Side Effects: **at least 4** bullet lines in describeSummaryMarkdown; **at least 6** bullet lines in describeFullMarkdown (add at least two more common effects in the full version vs summary).
+- Under ## Potential Risks & Interactions: **at least 4** bullet lines in describeSummaryMarkdown; **at least 6** bullet lines in describeFullMarkdown (add at least two more distinct risks or interaction themes in the full version vs summary).
+
+Other rules:
+- Prefer category "supplement" for vitamins, herbs, protein, probiotics unless clearly a prescription-only drug.
+- Never invent precise doses not hinted in the user text.
+- Keep tone educational, not prescribing; encourage clinician follow-up when appropriate.
+- If notes are too vague, set confidence <= 0.55 and say what is missing under Overview.`;
+};
+
+const buildManualUserMessage = ({ productName, brand, details }) => {
+  const parts = [
+    'User-provided product information:',
+    `- Name or nickname: ${productName.trim()}`,
+    brand && String(brand).trim()
+      ? `- Brand / manufacturer (optional): ${String(brand).trim()}`
+      : null,
+    '',
+    'Details (may include ingredients, dose, label text, or free-form description):',
+    '---',
+    String(details).trim(),
+    '---'
+  ].filter(Boolean);
+  return parts.join('\n');
+};
+
+const analyzeManualTextWithAI = async ({ productName, brand, details }) => {
+  const userBlock = buildManualUserMessage({ productName, brand, details });
+  const prompt = `${getManualAnalysisPrompt()}\n\n${userBlock}`;
+
+  const aiConfig = getAIConfiguration();
+  const providers = [
+    { name: 'openrouter', config: aiConfig.openrouter },
+    { name: 'openai', config: aiConfig.openai }
+  ];
+
+  for (const provider of providers) {
+    try {
+      const result = await callAIProviderForText(provider.name, provider.config, prompt);
+      if (result) {
+        return result;
+      }
+    } catch (error) {
+      console.log(`🤖 [AI_SCANNER] Manual text provider ${provider.name} failed:`, error.message);
+    }
+  }
+  throw new Error('All AI providers failed for manual entry');
+};
+
+const callAIProviderForText = async (providerName, config, prompt) => {
+  switch (providerName) {
+    case 'openrouter':
+      if (!config || !config.apiKey) {
+        throw new Error('No API key configured for openrouter');
+      }
+      return await callOpenRouterText(config, prompt);
+    case 'openai':
+      if (!config || !config.apiKey) {
+        throw new Error('No API key configured for openai');
+      }
+      return await callOpenAIText(config, prompt);
+    default:
+      throw new Error(`Unknown provider: ${providerName}`);
+  }
+};
+
+const callOpenRouterText = async (config, prompt) => {
+  const models = (
+    process.env.OPENROUTER_TEXT_MODELS ||
+    'openai/gpt-4o-mini,anthropic/claude-3-haiku-20240307,meta-llama/llama-3.3-70b-instruct'
+  )
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+
+  if (!models.length) {
+    throw new Error('No OpenRouter text models configured');
+  }
+
+  const payloadBase = {
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 6000,
+    temperature: 0.15
+  };
+
+  for (const model of models) {
+    try {
+      const response = await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        { ...payloadBase, model },
+        {
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://sym-app.com',
+            'X-Title': 'Sym Health App'
+          },
+          timeout: 60000
+        }
+      );
+
+      if (response.data?.choices?.length) {
+        const content = response.data.choices[0].message?.content;
+        const normalized = normalizeOpenRouterContent(content);
+        const analysis = parseAIResponse(normalized);
+        return {
+          ...analysis,
+          provider: 'openrouter',
+          model
+        };
+      }
+    } catch (error) {
+      const message =
+        error.response?.data?.error?.message ||
+        error.response?.data?.message ||
+        error.message;
+      console.log(`🤖 [AI_SCANNER] OpenRouter text model failed (${model}):`, message);
+      if (error.response?.status === 429) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+  }
+
+  throw new Error('All OpenRouter text models failed');
+};
+
+const callOpenAIText = async (config, prompt) => {
+  const response = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      model: process.env.OPENAI_TEXT_MODEL || 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 6000,
+      temperature: 0.15
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 60000
+    }
+  );
+
+  if (response.data.choices && response.data.choices[0]) {
+    const content = response.data.choices[0].message.content;
+    const analysis = parseAIResponse(content);
+    return {
+      ...analysis,
+      provider: 'openai',
+      model: process.env.OPENAI_TEXT_MODEL || 'gpt-4o-mini'
+    };
+  }
+
+  throw new Error('OpenAI text API failed');
+};
+
+/**
+ * POST JSON body: { productName, brand?, details }
+ */
+const scanManualProductInfo = async (req, res) => {
+  try {
+    const productName = typeof req.body?.productName === 'string' ? req.body.productName.trim() : '';
+    const brand = typeof req.body?.brand === 'string' ? req.body.brand.trim() : '';
+    const details = typeof req.body?.details === 'string' ? req.body.details.trim() : '';
+
+    if (productName.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please enter a product or supplement name (at least 2 characters).'
+      });
+    }
+
+    if (!details) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Please add something in the details field—even a single ingredient or short note (e.g. Ubiquinol) is enough.'
+      });
+    }
+
+    if (details.length > 8000) {
+      return res.status(400).json({
+        success: false,
+        error: 'Details are too long. Please shorten to 8,000 characters or less.'
+      });
+    }
+
+    const analysisStart = Date.now();
+    let aiResult;
+    try {
+      aiResult = await analyzeManualTextWithAI({ productName, brand, details });
+    } catch (aiError) {
+      console.error('🤖 [AI_SCANNER] Manual AI analysis failed:', aiError.message);
+      return res.json({
+        success: false,
+        message: 'No data found for this entry',
+        data: null,
+        error:
+          'Unable to analyze this text. Try adding ingredients, dose, or clearer product name, then try again.'
+      });
+    }
+
+    const processingTime = Date.now() - analysisStart;
+
+    const scanResult = new AiScanResult({
+      patientId: req.user._id,
+      name: aiResult.name,
+      category: aiResult.category,
+      description: aiResult.description,
+      ingredients: aiResult.ingredients,
+      benefits: aiResult.benefits,
+      sideEffects: aiResult.sideEffects,
+      confidence: aiResult.confidence,
+      imagePath: MANUAL_ENTRY_IMAGE_PLACEHOLDER,
+      imagePaths: [],
+      dosage: aiResult.dosage,
+      manufacturer: aiResult.manufacturer || (brand || null),
+      warnings: aiResult.warnings,
+      interactions: aiResult.interactions,
+      describeSummaryMarkdown: aiResult.describeSummaryMarkdown || undefined,
+      describeFullMarkdown: aiResult.describeFullMarkdown || undefined,
+      scannedAt: new Date(),
+      aiProvider: aiResult.provider,
+      aiModel: aiResult.model,
+      processingTime
+    });
+
+    await scanResult.save();
+
+    res.json({
+      success: true,
+      data: sanitizeAiScanForApiResponse({
+        id: scanResult._id,
+        name: scanResult.name,
+        category: scanResult.category,
+        description: scanResult.description,
+        ingredients: scanResult.ingredients,
+        benefits: scanResult.benefits,
+        sideEffects: scanResult.sideEffects,
+        confidence: scanResult.confidence,
+        dosage: scanResult.dosage,
+        manufacturer: scanResult.manufacturer,
+        warnings: scanResult.warnings,
+        interactions: scanResult.interactions,
+        describeSummaryMarkdown: scanResult.describeSummaryMarkdown,
+        describeFullMarkdown: scanResult.describeFullMarkdown,
+        scannedAt: scanResult.scannedAt,
+        imagePaths: []
+      }),
+      meta: {
+        source: 'manual',
+        aiProvider: scanResult.aiProvider,
+        aiModel: scanResult.aiModel,
+        processingTime
+      }
+    });
+  } catch (error) {
+    console.error('🤖 [AI_SCANNER] Error in manual scan:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process manual entry',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
 module.exports = {
   scanMedicationOrSupplement,
+  scanManualProductInfo,
   getScanHistory,
   getScanResult,
   deleteScanResult,

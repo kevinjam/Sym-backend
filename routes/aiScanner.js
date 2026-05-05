@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { 
-  scanMedicationOrSupplement, 
+  scanMedicationOrSupplement,
+  scanManualProductInfo,
   getScanHistory, 
   getScanResult, 
   deleteScanResult, 
@@ -119,6 +120,37 @@ const { authenticateToken } = require('../middleware/auth');
 router.use(authenticateToken);
 
 /**
+ * Typed supplement/medication on POST /scan uses the same URL as image upload.
+ * Do not rely only on req.is('application/json') — clients/proxies vary Content-Type.
+ * Never treat multipart image uploads as manual (even if odd text fields appear).
+ */
+const routeManualJsonViaScan = (req, res, next) => {
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  if (ct.includes('multipart/form-data')) {
+    return next();
+  }
+
+  const manualByQuery = String(req.query.mode || '').toLowerCase() === 'manual';
+
+  const body = req.body;
+  let manualByBody = false;
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    const rawName = body.productName;
+    const rawDetails = body.details;
+    const productName =
+      typeof rawName === 'string' ? rawName : rawName != null ? String(rawName) : '';
+    const details =
+      typeof rawDetails === 'string' ? rawDetails : rawDetails != null ? String(rawDetails) : '';
+    manualByBody = productName.trim().length > 0 && details.trim().length > 0;
+  }
+
+  if (manualByQuery || manualByBody) {
+    return scanManualProductInfo(req, res);
+  }
+  next();
+};
+
+/**
  * @swagger
  * /api/ai-scanner/scan:
  *   post:
@@ -190,7 +222,20 @@ router.use(authenticateToken);
  *                       type: string
  *                       example: "Failed to process image"
  */
-router.post('/scan', uploadScanImages, scanMedicationOrSupplement);
+router.post(
+  '/scan',
+  routeManualJsonViaScan,
+  uploadScanImages,
+  scanMedicationOrSupplement
+);
+
+/**
+ * @swagger
+ * /api/ai-scanner/scan-manual:
+ *   post:
+ *     summary: (Alias) Same as POST /scan with JSON body productName + details
+ */
+router.post('/scan-manual', scanManualProductInfo);
 
 /**
  * @swagger

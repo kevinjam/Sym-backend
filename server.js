@@ -24,6 +24,7 @@ const authRoutes = require('./routes/auth');
 const patientRoutes = require('./routes/patient');
 const doctorRoutes = require('./routes/doctor');
 const clinicRoutes = require('./routes/clinic');
+const locationRoutes = require('./routes/locations');
 const providerRoutes = require('./routes/provider');
 const appointmentRoutes = require('./routes/appointment');
 const medicationRoutes = require('./routes/medication');
@@ -40,6 +41,8 @@ const adherenceRoutes = require('./routes/adherence');
 const prescriptionScannerRoutes = require('./routes/prescriptionScanner');
 const scannedPrescriptionRoutes = require('./routes/scannedPrescription');
 const aiScannerRoutes = require('./routes/aiScanner');
+const healgoalRoutes = require('./routes/healgoal');
+const userRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
@@ -82,11 +85,14 @@ if (process.env.NODE_ENV === 'production') {
   cronJob.start();
 }
 
-// Rate limiting
+// Rate limiting (skip cheap read-only reference data — Find Clinics debounces many city lookups)
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
+  message: 'Too many requests from this IP, please try again later.',
+  skip: (req) =>
+    req.method === 'GET' &&
+    (req.originalUrl || req.url || '').startsWith('/api/locations'),
 });
 app.use('/api/', limiter);
 
@@ -117,6 +123,7 @@ app.get('/api/public/version', (req, res) => {
 
 // Protected routes (authentication required)
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/patient', patientRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/medication', medicationRoutes);
@@ -129,6 +136,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api/bug-report', bugReportRoutes);
 app.use('/api/doctors', doctorRoutes);
 app.use('/api/clinics', clinicRoutes);
+app.use('/api/locations', locationRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/health-reports', healthReportRoutes);
@@ -146,6 +154,7 @@ app.use('/api', adherenceRoutes);
 app.use('/api/prescription', prescriptionScannerRoutes);
 app.use('/api/scanned-prescriptions', scannedPrescriptionRoutes);
 app.use('/api/ai-scanner', aiScannerRoutes);
+app.use('/api/healgoal', healgoalRoutes);
 
 // CORS test endpoint
 app.get('/api/cors-test', (req, res) => {

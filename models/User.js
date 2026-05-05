@@ -73,7 +73,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['male', 'female', 'other']
   },
-  // Patient-specific fields
+  // Primary app user (patient role) — health profile fields
   conditions: [{
     name: String,
     severity: {
@@ -99,6 +99,19 @@ const userSchema = new mongoose.Schema({
   },
   lastLogin: Date,
   fcmToken: String, // For push notifications
+  hasAcceptedTerms: {
+    type: Boolean,
+    default: false,
+  },
+  termsAcceptedAt: {
+    type: Date,
+    default: null,
+  },
+  /** Version string the user last agreed to; compare with REQUIRED_TERMS_VERSION */
+  termsAcceptedVersion: {
+    type: String,
+    default: null,
+  },
   createdAt: {
     type: Date,
     default: Date.now
