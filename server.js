@@ -42,6 +42,9 @@ const prescriptionScannerRoutes = require('./routes/prescriptionScanner');
 const scannedPrescriptionRoutes = require('./routes/scannedPrescription');
 const aiScannerRoutes = require('./routes/aiScanner');
 const healgoalRoutes = require('./routes/healgoal');
+const calorieScanRoutes = require('./routes/calorieScan');
+const mindfulnessRoutes = require('./routes/mindfulness');
+const fitnessRoutes = require('./routes/fitness');
 const userRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
 const swaggerUi = require('swagger-ui-express');
@@ -68,7 +71,7 @@ app.use(helmet());
 // CORS configuration
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? process.env.CORS_ORIGIN?.split(',') || ['https://your-frontend-domain.com']
+    ? process.env.CORS_ORIGIN?.split(',') || ['https://www.symhealth-ai.com/']
     : process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://localhost:8080', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001', 'http://127.0.0.1:5173', 'http://127.0.0.1:8080'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -155,6 +158,9 @@ app.use('/api/prescription', prescriptionScannerRoutes);
 app.use('/api/scanned-prescriptions', scannedPrescriptionRoutes);
 app.use('/api/ai-scanner', aiScannerRoutes);
 app.use('/api/healgoal', healgoalRoutes);
+app.use('/api/calorie-scan', calorieScanRoutes);
+app.use('/api/mindfulness', mindfulnessRoutes);
+app.use('/api/fitness', fitnessRoutes);
 
 // CORS test endpoint
 app.get('/api/cors-test', (req, res) => {
@@ -226,6 +232,9 @@ async function startServer() {
     });
 
     console.log('Connected to MongoDB');
+
+    // Medication reminder cron must run only after DB is ready (bufferCommands is false).
+    schedulerService.start();
 
     const PORT = process.env.PORT || 9000;
     server.listen(PORT, () => {

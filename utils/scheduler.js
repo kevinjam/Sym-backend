@@ -1,10 +1,21 @@
 const cron = require('node-cron');
+const mongoose = require('mongoose');
 const PatientMedication = require('../models/PatientMedication');
 const NotificationService = require('./notificationService');
 
 class SchedulerService {
   constructor() {
     this.jobs = new Map();
+    /** Cron is registered in [start] after MongoDB connects — avoids queries with bufferCommands=false before connect. */
+    this._started = false;
+  }
+
+  /**
+   * Call once after `await mongoose.connect()` (e.g. from server.js).
+   */
+  start() {
+    if (this._started) return;
+    this._started = true;
     this.initializeScheduler();
   }
 
@@ -26,6 +37,9 @@ class SchedulerService {
   // Check for medication reminders
   async checkMedicationReminders() {
     try {
+      if (mongoose.connection.readyState !== 1) {
+        return;
+      }
       const now = new Date();
       const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
 
@@ -109,6 +123,9 @@ class SchedulerService {
   // Clean up old notifications (older than 30 days)
   async cleanupOldNotifications() {
     try {
+      if (mongoose.connection.readyState !== 1) {
+        return;
+      }
       const Notification = require('../models/Notification');
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
