@@ -63,6 +63,18 @@ async function enrichCoverFromGoogleBooks(book) {
   return book;
 }
 
+async function enrichMissingCovers(payload) {
+  if (!payload?.books?.length) return payload;
+  let changed = false;
+  const books = [];
+  for (const book of payload.books) {
+    const enriched = await enrichCoverFromGoogleBooks(book);
+    if (enriched.coverUrl && enriched.coverUrl !== book.coverUrl) changed = true;
+    books.push(enriched);
+  }
+  return changed ? { ...payload, books } : payload;
+}
+
 async function tryOpenRouter(query) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
@@ -130,7 +142,12 @@ async function discoverTopic({ query, patientId }) {
   }).sort({ createdAt: -1 });
 
   if (cached?.payload && cached.payload.books?.length) {
-    return { ...cached.payload, cached: true, provider: 'cache' };
+    const payload = await enrichMissingCovers(cached.payload);
+    if (payload !== cached.payload) {
+      cached.payload = payload;
+      await cached.save();
+    }
+    return { ...payload, cached: true, provider: 'cache' };
   }
 
   let payload = await tryOpenRouter(query);
@@ -140,9 +157,7 @@ async function discoverTopic({ query, patientId }) {
     payload = buildMockDiscovery(queryKey);
   }
 
-  for (let i = 0; i < payload.books.length; i += 1) {
-    payload.books[i] = await enrichCoverFromGoogleBooks(payload.books[i]);
-  }
+  payload = await enrichMissingCovers(payload);
 
   await MindfulnessSearch.create({
     patientId,

@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { admin } = require('../config/firebase');
 const User = require('../models/User');
+const RefreshToken = require('../models/RefreshToken');
+const AccountDeletionRequest = require('../models/AccountDeletionRequest');
 const { formatAuthUser } = require('../utils/formatAuthUser');
 const { issueTokenPair } = require('../utils/tokenService');
 const googleOAuthClient = new OAuth2Client();
@@ -283,6 +285,62 @@ class AuthController {
     } catch (error) {
       console.error('FCM token removal error:', error);
       res.status(500).json({ error: 'Failed to remove FCM token' });
+    }
+  }
+
+  // Request permanent account deletion. We keep a request row so support can
+  // complete deletion and contact the user if follow-up is needed.
+  static async requestAccountDeletion(req, res) {
+    try {
+      const user = await User.findById(req.user._id);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const existingRequest = await AccountDeletionRequest.findOne({
+        userId: user._id,
+        status: { $in: ['pending', 'processing'] },
+      });
+
+      if (!existingRequest) {
+        await AccountDeletionRequest.create({
+          userId: user._id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role,
+          requestSource: 'mobile_app',
+          userAgent: req.get('user-agent'),
+          ipAddress: req.ip,
+        });
+      }
+
+      user.isActive = false;
+      user.fcmToken = undefined;
+      await user.save();
+
+      await RefreshToken.updateMany(
+        { userId: String(user._id), revokedAt: null },
+        { $set: { revokedAt: new Date() } }
+      );
+
+      return res.status(202).json({
+        success: true,
+        message:
+          'Your account deletion request has been submitted. Our team will get back to you by email.',
+      });
+    } catch (error) {
+      console.error('Account deletion request error:', error);
+      if (error && error.code === 11000) {
+        return res.status(202).json({
+          success: true,
+          message:
+            'Your account deletion request is already submitted. Our team will get back to you by email.',
+        });
+      }
+      return res.status(500).json({
+        error: 'Failed to submit account deletion request',
+      });
     }
   }
 

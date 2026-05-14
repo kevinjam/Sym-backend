@@ -88,14 +88,22 @@ if (process.env.NODE_ENV === 'production') {
   cronJob.start();
 }
 
-// Rate limiting (skip cheap read-only reference data — Find Clinics debounces many city lookups)
+// Rate limiting (disabled in local development; skip cheap read-only reference data).
+const isProduction = process.env.NODE_ENV === 'production';
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
-  skip: (req) =>
-    req.method === 'GET' &&
-    (req.originalUrl || req.url || '').startsWith('/api/locations'),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  message: {
+    success: false,
+    error: 'Too many requests from this IP, please try again later.',
+  },
+  skip: (req) => {
+    if (!isProduction) return true;
+    return (
+      req.method === 'GET' &&
+      (req.originalUrl || req.url || '').startsWith('/api/locations')
+    );
+  },
 });
 app.use('/api/', limiter);
 

@@ -24,6 +24,7 @@ router.post(
 );
 router.get('/profile', authenticateToken, AuthController.getProfile);
 router.put('/profile', authenticateToken, AuthController.updateProfile);
+router.delete('/account', authenticateToken, AuthController.requestAccountDeletion);
 router.put('/fcm-token', authenticateToken, AuthController.updateFcmToken);
 router.delete('/fcm-token', authenticateToken, AuthController.removeFcmToken);
 router.post('/test-firebase-config', AuthController.testFirebaseConfig);
