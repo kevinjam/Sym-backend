@@ -393,18 +393,48 @@ class AuthController {
         typeof bodyLastName === 'string' && bodyLastName.trim().length > 0
           ? bodyLastName.trim()
           : null;
-      const relayEmailFromApple = isPrivateRelayEmail(email) ? email.toLowerCase().trim() : null;
+      const relayEmailFromApple = isPrivateRelayEmail(email) ? String(email).toLowerCase().trim() : null;
+      const normalizedEmail = email ? String(email).toLowerCase().trim() : null;
+      // Accept Apple relay and real emails from the verified token — never require manual entry.
       const resolvedEmail =
         provider === 'apple'
-          ? (manualEmail || (relayEmailFromApple ? null : (email ? String(email).toLowerCase().trim() : null)))
-          : (email ? String(email).toLowerCase().trim() : null);
+          ? (manualEmail || normalizedEmail || null)
+          : normalizedEmail;
 
-      if (provider === 'apple' && !resolvedEmail) {
-        return res.status(400).json({
-          error: 'Apple did not provide your email. Please enter a valid email to continue.',
-          requiresEmailInput: true,
-          code: 'APPLE_EMAIL_REQUIRED',
+      // Returning Apple users may have no email in the token; resolve by appleUserId below.
+      if (provider === 'apple' && !resolvedEmail && appleUserId) {
+        const existingAppleUser = await User.findOne({
+          $or: [
+            { appleUserId },
+            { providerId: providerId, provider: 'apple' },
+          ],
         });
+        if (existingAppleUser) {
+          existingAppleUser.lastLogin = new Date();
+          existingAppleUser.appleUserId = appleUserId;
+          if (normalizedFirstName && (!existingAppleUser.firstName || existingAppleUser.firstName === 'User')) {
+            existingAppleUser.firstName = normalizedFirstName;
+          }
+          if (normalizedLastName && (!existingAppleUser.lastName || existingAppleUser.lastName === 'User')) {
+            existingAppleUser.lastName = normalizedLastName;
+          }
+          if (relayEmailFromApple) {
+            existingAppleUser.appleRelayEmail = relayEmailFromApple;
+          }
+          await existingAppleUser.save();
+
+          const token = await issueTokenPair({
+            userId: String(existingAppleUser._id),
+            role: existingAppleUser.role,
+            email: existingAppleUser.email,
+          });
+
+          return res.json({
+            message: 'Apple login successful',
+            token: { ...token, isNewUser: false },
+            user: formatAuthUser(existingAppleUser),
+          });
+        }
       }
       
       // Log decoded token for debugging
@@ -590,7 +620,7 @@ class AuthController {
         providerId,
         appleUserId: provider === 'apple' ? appleUserId : undefined,
         appleRelayEmail: relayEmailFromApple || undefined,
-        isPrivateRelay: provider === 'apple' ? Boolean(!resolvedEmail && relayEmailFromApple) : false,
+        isPrivateRelay: provider === 'apple' ? Boolean(relayEmailFromApple) : false,
         emailVerified: provider === 'google' ? true : (effectiveEmail ? true : false),
         profilePicture: picture || undefined,
         isActive: true
