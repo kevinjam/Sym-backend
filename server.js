@@ -1,5 +1,6 @@
 const { Blob, File } = require('buffer');
 const dns = require('dns');
+const path = require('path');
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -50,6 +51,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const schedulerService = require('./utils/scheduler');
+const { resolveStorageMode } = require('./services/profilePictureStorageService');
 const cronJob = require('./config/cron');
 require('./config/firebase'); // Initialize Firebase
 
@@ -82,6 +84,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Cron job
 if (process.env.NODE_ENV === 'production') {
@@ -240,6 +243,8 @@ async function startServer() {
     });
 
     console.log('Connected to MongoDB');
+
+    await resolveStorageMode();
 
     // Medication reminder cron must run only after DB is ready (bufferCommands is false).
     schedulerService.start();

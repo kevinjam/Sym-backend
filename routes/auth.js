@@ -10,6 +10,7 @@ const {
   signRefreshToken,
   accessExpiresInSeconds,
 } = require('../utils/tokenService');
+const { profilePictureUpload } = require('../middleware/profilePictureUpload');
 
 const router = express.Router();
 
@@ -24,6 +25,21 @@ router.post(
 );
 router.get('/profile', authenticateToken, AuthController.getProfile);
 router.put('/profile', authenticateToken, AuthController.updateProfile);
+router.post(
+  '/profile-picture',
+  authenticateToken,
+  (req, res, next) => {
+    profilePictureUpload(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({
+          error: err.message || 'Invalid profile photo upload',
+        });
+      }
+      next();
+    });
+  },
+  AuthController.uploadProfilePicture
+);
 router.delete('/account', authenticateToken, AuthController.requestAccountDeletion);
 router.put('/fcm-token', authenticateToken, AuthController.updateFcmToken);
 router.delete('/fcm-token', authenticateToken, AuthController.removeFcmToken);

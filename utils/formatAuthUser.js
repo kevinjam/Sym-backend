@@ -19,9 +19,9 @@ function formatAuthUser(user) {
   return {
     id,
     email: user.email != null ? String(user.email) : '',
-    firstName: user.firstName,
-    lastName: user.lastName,
-    role: user.role,
+    firstName: user.firstName != null ? String(user.firstName) : '',
+    lastName: user.lastName != null ? String(user.lastName) : '',
+    role: user.role != null ? String(user.role) : 'patient',
     fullName: user.fullName,
     profilePicture: user.profilePicture ?? null,
     provider: user.provider ?? 'local',

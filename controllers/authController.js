@@ -1,4 +1,7 @@
 const jwt = require('jsonwebtoken');
+const path = require('path');
+const fs = require('fs');
+const sharp = require('sharp');
 const { OAuth2Client } = require('google-auth-library');
 const { admin } = require('../config/firebase');
 const User = require('../models/User');
@@ -6,6 +9,10 @@ const RefreshToken = require('../models/RefreshToken');
 const AccountDeletionRequest = require('../models/AccountDeletionRequest');
 const { formatAuthUser } = require('../utils/formatAuthUser');
 const { issueTokenPair } = require('../utils/tokenService');
+const {
+  uploadProfilePictureBuffer,
+  deleteStoredProfilePicture,
+} = require('../services/profilePictureStorageService');
 const googleOAuthClient = new OAuth2Client();
 const isPrivateRelayEmail = (email) =>
   typeof email === 'string' &&
@@ -195,6 +202,56 @@ class AuthController {
     } catch (error) {
       console.error('Profile update error:', error);
       res.status(500).json({ error: 'Failed to update profile' });
+    }
+  }
+
+  // Upload profile picture (multipart field: photo) → Cloudinary (free tier) or local disk in dev
+  static async uploadProfilePicture(req, res) {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'Photo is required' });
+      }
+
+      const userId = String(req.user._id);
+
+      const processedBuffer = await sharp(req.file.buffer)
+        .rotate()
+        .resize(512, 512, { fit: 'cover', position: 'centre' })
+        .jpeg({ quality: 85, mozjpeg: true })
+        .toBuffer();
+
+      const publicUrl = await uploadProfilePictureBuffer(userId, processedBuffer);
+
+      const existing = await User.findById(userId).select('profilePicture');
+      const oldUrl = existing?.profilePicture;
+
+      if (oldUrl) {
+        await deleteStoredProfilePicture(oldUrl);
+        // Legacy: remove disk file if an older build stored locally
+        if (oldUrl.startsWith('/uploads/profile-pictures/')) {
+          const oldFile = path.join(__dirname, '..', oldUrl);
+          fs.promises.unlink(oldFile).catch(() => {});
+        }
+      }
+
+      const user = await User.findByIdAndUpdate(
+        userId,
+        { profilePicture: publicUrl },
+        { new: true, runValidators: true }
+      ).select('-password');
+
+      res.json({
+        message: 'Profile picture updated successfully',
+        profilePicture: publicUrl,
+        user: formatAuthUser(user),
+      });
+      console.log(`[profile-picture] Saved for user ${userId}: ${publicUrl}`);
+    } catch (error) {
+      console.error('Profile picture upload error:', error);
+      res.status(500).json({
+        error: 'Failed to upload profile picture',
+        details: error.message || 'Unknown error',
+      });
     }
   }
 
