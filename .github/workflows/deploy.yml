@@ -73,7 +73,8 @@ jobs:
           echo ">>> Git sync"
           git fetch origin main
           git checkout main
-          git pull --ff-only origin main
+          # Server drift (e.g. npm install rewriting package-lock.json) must not block deploy.
+          git reset --hard origin/main
 
           echo ">>> Dependencies (production)"
           if [ -f package-lock.json ]; then
