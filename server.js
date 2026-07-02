@@ -46,6 +46,7 @@ const healgoalRoutes = require('./routes/healgoal');
 const calorieScanRoutes = require('./routes/calorieScan');
 const mindfulnessRoutes = require('./routes/mindfulness');
 const fitnessRoutes = require('./routes/fitness');
+const subscriptionRoutes = require('./routes/subscription');
 const userRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
 const swaggerUi = require('swagger-ui-express');
@@ -172,6 +173,7 @@ app.use('/api/healgoal', healgoalRoutes);
 app.use('/api/calorie-scan', calorieScanRoutes);
 app.use('/api/mindfulness', mindfulnessRoutes);
 app.use('/api/fitness', fitnessRoutes);
+app.use('/api/subscription', subscriptionRoutes);
 
 // CORS test endpoint
 app.get('/api/cors-test', (req, res) => {
