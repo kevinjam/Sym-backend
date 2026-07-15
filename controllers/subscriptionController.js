@@ -25,7 +25,47 @@ function subscriptionLookupFilter(appUserId) {
   return { revenueCatAppUserId: id };
 }
 
-function formatStatus(doc) {
+/**
+ * Backend-only premium unlock (no new APK needed).
+ *
+ * SUBSCRIPTION_FORCE_PREMIUM=true
+ *   → every authenticated user is treated as premium.
+ *
+ * SUBSCRIPTION_FORCE_PREMIUM_USER_IDS=oid1,oid2
+ *   → only those Sym user Mongo ids get premium (safer for prod testing).
+ */
+function forcePremiumUserIds() {
+  return String(process.env.SUBSCRIPTION_FORCE_PREMIUM_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function isForcePremiumEnabledFor(userId) {
+  const globalOn = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '').trim().toLowerCase(),
+  );
+  if (globalOn) return true;
+  if (!userId) return false;
+  const allow = forcePremiumUserIds();
+  return allow.includes(String(userId));
+}
+
+function formatStatus(doc, { forcePremium = false } = {}) {
+  if (forcePremium) {
+    return {
+      hasPremium: true,
+      isOnTrial: false,
+      entitlementId: process.env.REVENUECAT_ENTITLEMENT_ID || 'premium',
+      productIdentifier: 'sym_force_premium',
+      expirationDate: null,
+      willRenew: false,
+      status: 'active',
+      managementUrl: null,
+      lastSyncedAt: new Date().toISOString(),
+    };
+  }
+
   if (!doc) {
     return {
       hasPremium: false,
@@ -98,6 +138,20 @@ async function upsertFromRevenueCat(appUserIdOrUserId) {
 async function getStatus(req, res) {
   try {
     const userId = req.user.id || req.user._id;
+    const forcePremium = isForcePremiumEnabledFor(userId);
+
+    // Forced premium short-circuits RevenueCat so paywalls unlock without a store purchase.
+    if (forcePremium) {
+      return res.json({
+        success: true,
+        data: {
+          ...formatStatus(null, { forcePremium: true }),
+          revenueCatConfigured: revenueCatService.isConfigured(),
+          forcePremium: true,
+        },
+      });
+    }
+
     let doc = await UserSubscription.findOne(subscriptionLookupFilter(userId));
 
     if (revenueCatService.isConfigured()) {
@@ -113,6 +167,7 @@ async function getStatus(req, res) {
       data: {
         ...formatStatus(doc),
         revenueCatConfigured: revenueCatService.isConfigured(),
+        forcePremium: false,
       },
     });
   } catch (error) {
@@ -150,6 +205,14 @@ async function getPlans(req, res) {
 async function syncSubscription(req, res) {
   try {
     const userId = req.user.id || req.user._id;
+
+    if (isForcePremiumEnabledFor(userId)) {
+      return res.json({
+        success: true,
+        data: formatStatus(null, { forcePremium: true }),
+        message: 'Force premium is enabled on the server.',
+      });
+    }
 
     if (!revenueCatService.isConfigured()) {
       return res.status(503).json({
