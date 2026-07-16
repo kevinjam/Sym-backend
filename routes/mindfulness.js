@@ -11,9 +11,11 @@ const {
   patchLibrary,
   deleteLibrary,
   getStats,
+  listCatalog,
 } = require('../controllers/mindfulnessController');
 
 router.post('/discover', authenticateToken, postDiscover);
+router.get('/catalog', authenticateToken, listCatalog);
 router.get('/searches', authenticateToken, listSearchHistory);
 router.get('/library', authenticateToken, listLibrary);
 router.post('/library', authenticateToken, upsertLibrary);

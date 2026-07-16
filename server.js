@@ -248,6 +248,13 @@ async function startServer() {
 
     console.log('Connected to MongoDB');
 
+    try {
+      const { ensureMindfulnessCatalogSeeded } = require('./services/mindfulnessCatalogService');
+      await ensureMindfulnessCatalogSeeded();
+    } catch (seedErr) {
+      console.warn('[mindfulness-catalog] Startup seed skipped:', seedErr.message);
+    }
+
     await resolveStorageMode();
 
     // Medication reminder cron must run only after DB is ready (bufferCommands is false).

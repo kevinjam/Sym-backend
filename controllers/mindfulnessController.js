@@ -3,7 +3,12 @@
 const mongoose = require('mongoose');
 const MindfulnessSearch = require('../models/MindfulnessSearch');
 const MindfulnessSavedBook = require('../models/MindfulnessSavedBook');
+const MindfulnessCatalogBook = require('../models/MindfulnessCatalogBook');
 const { discoverTopic } = require('../services/mindfulnessDiscoveryService');
+const {
+  ensureMindfulnessCatalogSeeded,
+  toApiBook,
+} = require('../services/mindfulnessCatalogService');
 
 function patientObjectId(userId) {
   if (!userId) return null;
@@ -197,6 +202,22 @@ async function getStats(req, res) {
   }
 }
 
+async function listCatalog(req, res) {
+  try {
+    await ensureMindfulnessCatalogSeeded();
+    const rows = await MindfulnessCatalogBook.find({ published: true })
+      .sort({ sortOrder: 1, title: 1 })
+      .lean();
+    return res.json({
+      success: true,
+      data: { books: rows.map(toApiBook) },
+    });
+  } catch (e) {
+    console.error('[mindfulness] listCatalog:', e);
+    return res.status(500).json({ success: false, message: 'catalog_failed' });
+  }
+}
+
 module.exports = {
   postDiscover,
   listSearchHistory,
@@ -205,4 +226,5 @@ module.exports = {
   patchLibrary,
   deleteLibrary,
   getStats,
+  listCatalog,
 };

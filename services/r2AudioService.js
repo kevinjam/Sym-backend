@@ -34,9 +34,17 @@ const CALM_CATALOG_EXCLUDED = new Set(
 
 const AUDIO_EXTENSIONS = /\.(mp3|m4a|wav|ogg|aac|flac)$/i;
 
+/** Friendly catalog titles (R2 keys stay unchanged). */
+const CALM_TITLE_OVERRIDES = {
+  fan: 'Flawless',
+  sleeper: 'Alpha waves',
+};
+
 function titleFromFileKey(fileKey) {
   const base = fileKey.split('/').pop() || fileKey;
   const withoutExt = base.replace(AUDIO_EXTENSIONS, '');
+  const override = CALM_TITLE_OVERRIDES[withoutExt.trim().toLowerCase()];
+  if (override) return override;
   return withoutExt
     .replace(/[-_]+/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
