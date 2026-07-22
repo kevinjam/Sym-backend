@@ -27,7 +27,7 @@ jobs:
   deploy:
     name: SSH deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Configure SSH
@@ -41,7 +41,7 @@ jobs:
             exit 1
           fi
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/sym-deploy
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/sym-deploy
           chmod 600 ~/.ssh/sym-deploy
           ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
@@ -59,16 +59,44 @@ jobs:
           fi
           REMOTE_PATH="${DEPLOY_PATH:-/var/www/sym-backend}"
 
+          # Pass REMOTE_PATH into the remote shell; quote the heredoc so remote $vars are not expanded locally.
           ssh -i ~/.ssh/sym-deploy \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
             "${SERVER_USER}@${SERVER_HOST}" \
-            bash -s <<REMOTE_EOF
+            "REMOTE_PATH=$(printf '%q' "$REMOTE_PATH") bash -s" <<'REMOTE_EOF'
           set -euo pipefail
           APP_NAME="sym-backend"
           cd "${REMOTE_PATH}"
 
-          echo ">>> Deploy directory: \$(pwd)"
+          echo ">>> Deploy directory: $(pwd)"
+          echo ">>> Memory before deploy"
+          free -h || true
+
+          ensure_swap() {
+            # Small EC2 boxes (t2/t3.micro) OOM-kill npm without swap.
+            if swapon --show 2>/dev/null | grep -q .; then
+              echo ">>> Swap already present"
+              swapon --show || true
+              return 0
+            fi
+            echo ">>> Creating 2G swapfile (needs sudo)"
+            if command -v sudo >/dev/null 2>&1; then
+              sudo fallocate -l 2G /swapfile 2>/dev/null \
+                || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+              if ! grep -q '^/swapfile ' /etc/fstab 2>/dev/null; then
+                echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+              fi
+              swapon --show || true
+            else
+              echo ">>> No sudo — cannot create swap; npm may still OOM on small instances"
+            fi
+          }
+          ensure_swap
 
           echo ">>> Git sync"
           git fetch origin main
@@ -76,22 +104,33 @@ jobs:
           # Server drift (e.g. npm install rewriting package-lock.json) must not block deploy.
           git reset --hard origin/main
 
-          echo ">>> Dependencies (production)"
-          if [ -f package-lock.json ]; then
-            npm ci --omit=dev
-          else
-            npm install --production
+          # Free RAM during install — brief downtime, avoids OOM on 1GB instances.
+          if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
+            echo ">>> Stopping PM2 app for install"
+            pm2 stop "${APP_NAME}" || true
           fi
 
+          echo ">>> Dependencies (production, low-memory)"
+          export NODE_OPTIONS="${NODE_OPTIONS:+${NODE_OPTIONS} }--max-old-space-size=512"
+          # Prefer incremental install when node_modules exists — lower peak RAM than npm ci.
+          if [ -f package-lock.json ] && [ ! -d node_modules ]; then
+            npm ci --omit=dev --no-audit --no-fund --maxsockets=1
+          else
+            npm install --omit=dev --no-audit --no-fund --maxsockets=1
+          fi
+
+          echo ">>> Memory after install"
+          free -h || true
+
           echo ">>> PM2"
-          if pm2 describe "\${APP_NAME}" >/dev/null 2>&1; then
-            pm2 reload "\${APP_NAME}" --update-env
+          if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
+            pm2 restart "${APP_NAME}" --update-env
           elif [ -f ecosystem.config.cjs ]; then
             pm2 start ecosystem.config.cjs
           elif [ -f ecosystem.config.js ]; then
             pm2 start ecosystem.config.js
           else
-            pm2 start server.js --name "\${APP_NAME}"
+            pm2 start server.js --name "${APP_NAME}"
           fi
 
           pm2 save
