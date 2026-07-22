@@ -46,6 +46,8 @@ const healgoalRoutes = require('./routes/healgoal');
 const calorieScanRoutes = require('./routes/calorieScan');
 const mindfulnessRoutes = require('./routes/mindfulness');
 const fitnessRoutes = require('./routes/fitness');
+const widgetsRoutes = require('./routes/widgets');
+const thesisChatRoutes = require('./routes/thesisChat');
 const subscriptionRoutes = require('./routes/subscription');
 const audioRoutes = require('./routes/audio');
 const userRoutes = require('./routes/users');
@@ -66,9 +68,9 @@ const io = socketIo(server, {
   }
 });
 
-// Trust proxy - Required when behind reverse proxy (Render, Heroku, etc.)
+// Trust proxy - Required when behind reverse proxy (nginx, Cloudflare, Render).
 // This allows Express to correctly identify client IPs from X-Forwarded-For headers
-// app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
 // Middleware
 app.use(helmet());
@@ -174,6 +176,8 @@ app.use('/api/healgoal', healgoalRoutes);
 app.use('/api/calorie-scan', calorieScanRoutes);
 app.use('/api/mindfulness', mindfulnessRoutes);
 app.use('/api/fitness', fitnessRoutes);
+app.use('/api/widgets', widgetsRoutes);
+app.use('/api/thesis', thesisChatRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/audio', audioRoutes);
 

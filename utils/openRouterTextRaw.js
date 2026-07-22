@@ -21,10 +21,10 @@ function normalizeOpenRouterContent(content) {
 
 /**
  * Chat completion via OpenRouter; returns raw assistant text (no product JSON parser).
- * @param {{ apiKey: string, prompt: string, maxTokens?: number }} opts
+ * @param {{ apiKey: string, prompt?: string, messages?: {role:string,content:string}[], maxTokens?: number }} opts
  * @returns {Promise<{ text: string, model: string, provider: string }>}
  */
-async function callOpenRouterChatRaw({ apiKey, prompt, maxTokens = 2500 }) {
+async function callOpenRouterChatRaw({ apiKey, prompt, messages, maxTokens = 2500 }) {
   const models = (
     process.env.OPENROUTER_TEXT_MODELS ||
     'openai/gpt-4o-mini,anthropic/claude-3-haiku-20240307,meta-llama/llama-3.3-70b-instruct'
@@ -40,10 +40,15 @@ async function callOpenRouterChatRaw({ apiKey, prompt, maxTokens = 2500 }) {
     throw new Error('No OpenRouter text models configured');
   }
 
+  const chatMessages =
+    Array.isArray(messages) && messages.length
+      ? messages
+      : [{ role: 'user', content: String(prompt || '') }];
+
   const payloadBase = {
-    messages: [{ role: 'user', content: prompt }],
+    messages: chatMessages,
     max_tokens: maxTokens,
-    temperature: 0.2
+    temperature: 0.45,
   };
 
   for (const model of models) {

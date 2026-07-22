@@ -1,43 +1,510 @@
 'use strict';
 
 /**
- * API-backed exercise rows (same JSON shape as Flutter [FitnessExercise]).
- * Full curated library can replace this later; today we mirror the app's fallback plan.
+ * Curated gym catalog — mirrors React `fitnessExercises.ts` + how-to steps.
+ * Home environment reuses gym names with bodyweight-friendly substitutions where needed.
  */
-function exercisesFor(muscleGroup, environment) {
-  const m = String(muscleGroup || '').trim() || 'Training';
-  const env = String(environment || 'gym').toLowerCase() === 'home' ? 'home' : 'gym';
-  const equipment = env === 'home' ? 'Bodyweight' : 'Gym equipment';
 
-  return [
-    {
-      name: `${m} activation circuit`,
-      summary: `Move through three rounds of foundational ${m} movements to wake up the area before progressing.`,
-      difficulty: 'beginner',
-      equipment,
-      sets: 3,
-      reps: '10–12',
-      tip: 'Focus on slow, controlled reps over speed.',
-    },
-    {
-      name: `${m} strength block`,
-      summary: `Pick one compound lift and one accessory for ${m}. Rest 60–90 seconds between sets.`,
-      difficulty: 'intermediate',
-      equipment,
-      sets: 4,
-      reps: '8–10',
-      tip: 'Add weight only when the last rep stays clean.',
-    },
-    {
-      name: `${m} mobility finisher`,
-      summary: `Five minutes of mobility work targeting ${m} to cool the session down.`,
-      difficulty: 'beginner',
-      equipment: 'No equipment',
-      sets: 1,
-      reps: '5 min',
-      tip: 'Breathe slow and stop short of pain.',
-    },
-  ];
+function ex(name, sets, equipment, level, imgUrl, steps) {
+  const setsMatch = String(sets).match(/^(\d+)/);
+  const setsNum = setsMatch ? parseInt(setsMatch[1], 10) : 3;
+  const repsPart = String(sets).replace(/^\d+\s*[×x]\s*/i, '').trim() || '10–12';
+  return {
+    name,
+    summary: `Focus on controlled form for ${name.toLowerCase()}.`,
+    difficulty: String(level).toLowerCase(),
+    equipment,
+    sets: setsNum,
+    reps: repsPart,
+    tip: steps[0] || 'Keep form tight and breathe steadily.',
+    imageUrl: imgUrl,
+    steps,
+  };
+}
+
+const GYM = {
+  Chest: [
+    ex('Barbell bench press', '4 × 6–8', 'Barbell + bench', 'Intermediate',
+      'https://images.unsplash.com/photo-1532029837206-abbe2b7620e3?w=400&q=80',
+      [
+        'Lie on the bench with eyes under the bar and feet flat on the floor.',
+        'Grip the bar slightly wider than shoulder-width and unrack with locked elbows.',
+        'Lower the bar to mid-chest with control, elbows about 45° from your torso.',
+        'Press the bar up and slightly back until arms are straight without bouncing.',
+        'Keep shoulder blades retracted and a slight arch throughout.',
+      ]),
+    ex('Incline dumbbell press', '3 × 8–10', 'Dumbbells + incline', 'Intermediate',
+      'https://images.unsplash.com/photo-1603503364272-6e28e046b37a?w=400&q=80',
+      [
+        'Set the bench to about 30–45° and sit with dumbbells on your thighs.',
+        'Kick the weights up as you lie back; start with arms extended above the chest.',
+        'Lower the dumbbells to the sides of your upper chest with elbows slightly tucked.',
+        'Press up until arms are nearly straight without clanking the weights together.',
+        'Control the eccentric — 2–3 seconds down keeps tension on the upper chest.',
+      ]),
+    ex('Cable fly', '3 × 12–15', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Set cables at chest height and step forward into a staggered stance.',
+        'Keep a soft bend in the elbows and open the arms wide until you feel a stretch.',
+        'Bring the handles together in a hugging motion, squeezing the chest at the finish.',
+        'Return slowly — do not let the weight stack slam.',
+        'Lead with the chest, not the hands, to keep the delts from taking over.',
+      ]),
+    ex('Push-up burnout', '2 × AMRAP', 'Bodyweight', 'Beginner',
+      'https://images.unsplash.com/photo-1598971457999-ca4ef48a9a71?w=400&q=80',
+      [
+        'Start in a high plank: hands under shoulders, body in a straight line.',
+        'Lower until chest nearly touches the floor, elbows tracking back ~45°.',
+        'Press up without letting hips sag or pike.',
+        'Breathe out on the push; stop when form breaks.',
+        'Drop to knees only when you cannot keep a rigid torso.',
+      ]),
+    ex('Machine chest press', '3 × 10–12', 'Chest press machine', 'Beginner',
+      'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400&q=80',
+      [
+        'Adjust the seat so handles are at mid-chest height.',
+        'Grip the handles and plant feet; brace your core.',
+        'Press forward until arms are extended without locking harshly.',
+        'Return with control until you feel a stretch across the chest.',
+        'Keep wrists stacked and shoulders down away from the ears.',
+      ]),
+    ex('Weighted chest dip', '3 × 5–8', 'Dip station', 'Advanced',
+      'https://images.unsplash.com/photo-1599058917212-d750089bc07e?w=400&q=80',
+      [
+        'Support yourself on the bars with arms straight and a slight forward lean.',
+        'Lower until upper arms are roughly parallel to the floor (or as mobility allows).',
+        'Press back up without swinging the legs.',
+        'Keep the chest leading slightly forward to bias pecs over triceps.',
+        'Add weight only when bodyweight dips feel solid for 8+ clean reps.',
+      ]),
+    ex('Pec deck fly', '3 × 12–15', 'Pec deck machine', 'Beginner',
+      'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400&q=80',
+      [
+        'Sit with back flat against the pad; adjust arms so elbows are slightly bent.',
+        'Bring the pads together in front of the chest in a smooth arc.',
+        'Squeeze for one beat at the middle.',
+        'Open slowly to a comfortable stretch — no shoulder pain.',
+        'Avoid shrugging; keep shoulder blades gently set.',
+      ]),
+    ex('Low-to-high cable fly', '3 × 10–12', 'Cable machine', 'Intermediate',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Set pulleys low and grab the handles with palms facing up/in.',
+        'Step forward and lift the handles upward toward eye level.',
+        'Meet the hands in front of the upper chest with soft elbows.',
+        'Lower with control back to the start stretch.',
+        'Think “scoop upward” to light up the clavicular chest fibers.',
+      ]),
+  ],
+  Shoulders: [
+    ex('Overhead press', '4 × 5–8', 'Barbell', 'Intermediate',
+      'https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?w=400&q=80',
+      [
+        'Set the bar at upper-chest height in a rack; grip just outside the shoulders.',
+        'Unrack with elbows slightly forward and core braced.',
+        'Press the bar overhead in a straight path, moving the head slightly back then through.',
+        'Lock out with biceps by the ears, then lower to the front rack.',
+        'Avoid excessive lower-back arch — squeeze glutes.',
+      ]),
+    ex('Lateral raise', '3 × 12–15', 'Dumbbells', 'Beginner',
+      'https://images.unsplash.com/photo-1598575522694-d55ada5e48f4?w=400&q=80',
+      [
+        'Stand tall with dumbbells at your sides, soft elbows.',
+        'Raise arms out to the sides until roughly shoulder height.',
+        'Lead with the elbows; pinkies slightly higher than thumbs.',
+        'Lower slowly for 2–3 seconds.',
+        'Use light weights — swinging kills the side-delt stimulus.',
+      ]),
+    ex('Cable rear-delt fly', '3 × 12–15', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Set cables high and cross the handles in front of you.',
+        'Pull the arms out and back in a wide arc, squeezing the rear delts.',
+        'Keep a soft elbow bend and chest proud.',
+        'Return under control without letting the stack slam.',
+        'Think “open the arms,” not “row the elbows back hard.”',
+      ]),
+  ],
+  Back: [
+    ex('Barbell row', '4 × 6–8', 'Barbell', 'Intermediate',
+      'https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?w=400&q=80',
+      [
+        'Hinge at the hips with a soft knee bend and flat back.',
+        'Grip the bar just outside the legs; pull toward the lower ribs.',
+        'Drive elbows back and squeeze the shoulder blades.',
+        'Lower under control without rounding the spine.',
+        'Keep the torso angle steady — no bouncing each rep.',
+      ]),
+    ex('Pull-up', '3 × max', 'Pull-up bar', 'Intermediate',
+      'https://images.unsplash.com/photo-1526506118085-60ce8714f8c5?w=400&q=80',
+      [
+        'Hang from the bar with hands slightly wider than shoulders.',
+        'Pull the chest toward the bar by driving elbows down.',
+        'Avoid shrugging; keep ribs down.',
+        'Lower until arms are nearly straight.',
+        'Use a band or assisted machine if you cannot do clean reps yet.',
+      ]),
+    ex('Lat pulldown', '3 × 10–12', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1534872850130-5355701fcc89?w=400&q=80',
+      [
+        'Sit with thighs locked under the pad; grip the bar wide.',
+        'Pull the bar to the upper chest while leaning slightly back.',
+        'Squeeze the lats at the bottom for a beat.',
+        'Return high without fully losing tension.',
+        'Lead with the elbows, not the hands.',
+      ]),
+    ex('Seated cable row', '3 × 10–12', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Sit tall with feet on the platform and a slight knee bend.',
+        'Pull the handle to the torso, elbows close to the body.',
+        'Squeeze mid-back at the finish.',
+        'Extend arms forward under control.',
+        'Avoid rounding the lower back on the stretch.',
+      ]),
+    ex('Face pull', '3 × 15', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Set the rope at upper-chest / face height.',
+        'Pull the rope toward the face, splitting the ends by the ears.',
+        'Externally rotate so knuckles face back at the finish.',
+        'Squeeze rear delts and upper back.',
+        'Use a light load — this is posture and shoulder health work.',
+      ]),
+    ex('Dumbbell deadlift', '3 × 8–10', 'Dumbbells', 'Intermediate',
+      'https://images.unsplash.com/photo-1517963879433-6ad2b056d712?w=400&q=80',
+      [
+        'Stand with dumbbells at the sides; hinge hips back.',
+        'Lower until you feel a hamstring stretch with a flat back.',
+        'Drive through the floor to stand tall.',
+        'Keep the weights close to the legs.',
+        'Brace the core — no rounding at the bottom.',
+      ]),
+  ],
+  Biceps: [
+    ex('Barbell curl', '4 × 8–10', 'Barbell', 'Beginner',
+      'https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=400&q=80',
+      [
+        'Stand with elbows pinned near the ribs.',
+        'Curl the bar up without swinging the torso.',
+        'Squeeze at the top, then lower for 2–3 seconds.',
+        'Keep wrists neutral.',
+        'Stop short of fully relaxing at the bottom to keep tension.',
+      ]),
+    ex('Hammer curl', '3 × 10–12', 'Dumbbells', 'Beginner',
+      'https://images.unsplash.com/photo-1598268030450-7a476f602bf6?w=400&q=80',
+      [
+        'Hold dumbbells with a neutral (palms-in) grip.',
+        'Curl both arms or alternate, elbows fixed.',
+        'Raise until forearms are vertical.',
+        'Lower slowly.',
+        'Great for brachialis and grip — keep the wrists straight.',
+      ]),
+    ex('Concentration curl', '3 × 12–15', 'Dumbbell', 'Beginner',
+      'https://images.unsplash.com/photo-1609899517237-77d357b047cf?w=400&q=80',
+      [
+        'Sit and brace the working elbow against the inner thigh.',
+        'Curl the dumbbell toward the shoulder.',
+        'Pause and squeeze at the top.',
+        'Lower under full control.',
+        'Switch sides after all reps.',
+      ]),
+    ex('Cable curl', '3 × 12–15', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Attach a straight or EZ bar to the low pulley.',
+        'Curl up with elbows tucked.',
+        'Squeeze, then extend fully without letting the stack slam.',
+        'Keep torso still.',
+        'Constant tension is the advantage of cables — use it.',
+      ]),
+    ex('Incline dumbbell curl', '3 × 10–12', 'Dumbbells + bench', 'Intermediate',
+      'https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=400&q=80',
+      [
+        'Lie back on a 45° incline with arms hanging.',
+        'Curl without swinging; stretch fully at the bottom.',
+        'Squeeze at the top.',
+        'Lower slowly into the stretch.',
+        'This long-head bias loves a full stretch — do not cheat the bottom.',
+      ]),
+  ],
+  Triceps: [
+    ex('Tricep pushdown', '4 × 10–12', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1728209228735-517d22a6fa6d?w=400&q=80',
+      [
+        'Stand tall with elbows pinned to your sides.',
+        'Push the bar or rope down until arms are straight.',
+        'Squeeze the triceps at the bottom.',
+        'Return until forearms are roughly parallel to the floor.',
+        'Do not let elbows flare forward.',
+      ]),
+    ex('Skull crusher', '3 × 8–10', 'Barbell + bench', 'Intermediate',
+      'https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?w=400&q=80',
+      [
+        'Lie on a bench holding an EZ bar above the chest.',
+        'Bend only at the elbows to lower the bar toward the forehead / hairline.',
+        'Extend back to the start without moving the upper arms much.',
+        'Use a spotter or light load until the groove feels safe.',
+        'Keep wrists stacked and elbows pointing up.',
+      ]),
+    ex('Overhead tricep extension', '3 × 10–12', 'Dumbbell', 'Beginner',
+      'https://images.unsplash.com/photo-1609899517237-77d357b047cf?w=400&q=80',
+      [
+        'Hold one dumbbell overhead with both hands.',
+        'Lower behind the head by bending the elbows.',
+        'Extend until arms are straight without locking harshly.',
+        'Keep elbows close to the ears.',
+        'Brace the core so the ribs do not flare.',
+      ]),
+    ex('Bench dip', '3 × 12–15', 'Bench', 'Beginner',
+      'https://images.unsplash.com/photo-1607962776833-7ec9ef952784?w=400&q=80',
+      [
+        'Place hands on a bench behind you, fingers forward, feet out.',
+        'Lower until elbows are about 90°.',
+        'Press up by straightening the arms.',
+        'Keep hips close to the bench.',
+        'Bend the knees more to make it easier; elevate feet to make it harder.',
+      ]),
+    ex('Close-grip bench press', '3 × 8–10', 'Barbell + bench', 'Intermediate',
+      'https://images.unsplash.com/photo-1532029837206-abbe2b7620e3?w=400&q=80',
+      [
+        'Grip the bar about shoulder-width (not ultra-narrow).',
+        'Lower to the lower chest with elbows tucked.',
+        'Press up focusing on locking out the triceps.',
+        'Keep wrists stacked over elbows.',
+        'Use a spotter for heavier sets.',
+      ]),
+  ],
+  Legs: [
+    ex('Barbell squat', '4 × 6–8', 'Barbell + rack', 'Intermediate',
+      'https://images.unsplash.com/photo-1649887974297-4be052375a67?w=400&q=80',
+      [
+        'Set the bar on the upper back; brace and unrack.',
+        'Feet about shoulder-width, toes slightly out.',
+        'Sit the hips down and back while knees track over toes.',
+        'Descend to parallel or as mobility allows, then drive up.',
+        'Keep the chest proud and heels planted.',
+      ]),
+    ex('Romanian deadlift', '3 × 8–10', 'Barbell', 'Intermediate',
+      'https://images.unsplash.com/photo-1534368270820-9de3d8053204?w=400&q=80',
+      [
+        'Stand tall holding the bar at the thighs.',
+        'Hinge hips back, sliding the bar down the legs.',
+        'Stop when you feel a strong hamstring stretch with a flat back.',
+        'Drive hips forward to stand.',
+        'Soft knees — this is a hinge, not a squat.',
+      ]),
+    ex('Leg press', '3 × 10–12', 'Leg press machine', 'Beginner',
+      'https://images.unsplash.com/photo-1434682772747-f16d3ea162c3?w=400&q=80',
+      [
+        'Sit with feet mid-platform, shoulder-width.',
+        'Unlock and lower until knees are about 90°.',
+        'Press through mid-foot without locking out violently.',
+        'Keep the lower back against the pad.',
+        'Do not let the knees cave inward.',
+      ]),
+    ex('Walking lunge', '3 × 12 each', 'Dumbbells', 'Beginner',
+      'https://images.unsplash.com/photo-1609899517237-77d357b047cf?w=400&q=80',
+      [
+        'Step forward into a lunge until both knees are near 90°.',
+        'Drive through the front heel to step into the next stride.',
+        'Keep torso upright.',
+        'Alternate legs with each step.',
+        'Shorten the stride if the front knee shoots past the toes painfully.',
+      ]),
+    ex('Leg curl', '3 × 12–15', 'Leg curl machine', 'Beginner',
+      'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=400&q=80',
+      [
+        'Lie or sit so the pad rests on the lower calves.',
+        'Curl the heels toward the glutes.',
+        'Squeeze hamstrings at the top.',
+        'Lower under control.',
+        'Avoid yanking with the lower back.',
+      ]),
+    ex('Calf raise', '4 × 15–20', 'Machine or bodyweight', 'Beginner',
+      'https://images.unsplash.com/photo-1607962776833-7ec9ef952784?w=400&q=80',
+      [
+        'Stand with the balls of the feet on a step or machine.',
+        'Rise onto the toes as high as possible.',
+        'Pause briefly at the top.',
+        'Lower into a full stretch.',
+        'Use both legs or one for more challenge.',
+      ]),
+  ],
+  Glutes: [
+    ex('Hip thrust', '4 × 10–12', 'Barbell + bench', 'Intermediate',
+      'https://images.unsplash.com/photo-1434682772747-f16d3ea162c3?w=400&q=80',
+      [
+        'Sit with upper back against a bench; bar over the hips (pad recommended).',
+        'Drive through the heels to lift hips until torso is roughly parallel to the floor.',
+        'Squeeze glutes hard at the top — chin tucked slightly.',
+        'Lower with control without collapsing the ribs.',
+        'Avoid overarching the lower back at lockout.',
+      ]),
+    ex('Sumo deadlift', '3 × 8', 'Barbell', 'Intermediate',
+      'https://images.unsplash.com/photo-1517963879433-6ad2b056d712?w=400&q=80',
+      [
+        'Take a wide stance with toes out; grip inside the knees.',
+        'Hips lower than a conventional pull; chest up.',
+        'Push the floor away and lock out with glutes.',
+        'Lower with control.',
+        'Keep knees tracking over toes.',
+      ]),
+    ex('Cable kickback', '3 × 15 each', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Attach an ankle cuff; face the stack.',
+        'Kick the working leg back without arching the back.',
+        'Squeeze the glute at full extension.',
+        'Return slowly.',
+        'Keep the torso still — isolate the hip.',
+      ]),
+    ex('Bulgarian split squat', '3 × 10 each', 'Dumbbells + bench', 'Intermediate',
+      'https://images.unsplash.com/photo-1649887974297-4be052375a67?w=400&q=80',
+      [
+        'Place the rear foot on a bench; front foot far enough for a stable lunge.',
+        'Lower until the front thigh is near parallel.',
+        'Drive through the front heel to stand.',
+        'Keep the torso mostly upright.',
+        'Complete all reps on one side, then switch.',
+      ]),
+    ex('Glute bridge', '3 × 15–20', 'Bodyweight or plate', 'Beginner',
+      'https://images.unsplash.com/photo-1607962776833-7ec9ef952784?w=400&q=80',
+      [
+        'Lie on your back, knees bent, feet flat.',
+        'Drive hips up by squeezing the glutes.',
+        'Pause at the top without flaring the ribs.',
+        'Lower under control.',
+        'Add a plate on the hips when bodyweight is easy.',
+      ]),
+  ],
+  Core: [
+    ex('Plank hold', '3 × 45 sec', 'Bodyweight', 'Beginner',
+      'https://images.unsplash.com/photo-1592334628151-36869c12ad0e?w=400&q=80',
+      [
+        'Set forearms and toes on the floor; body in a straight line.',
+        'Brace as if about to be punched in the stomach.',
+        'Keep hips level — not sagging or piked.',
+        'Breathe steadily; hold for the timed set.',
+        'Drop to knees if form fails, then rebuild.',
+      ]),
+    ex('Cable crunch', '3 × 12–15', 'Cable machine', 'Beginner',
+      'https://images.unsplash.com/photo-1767552273968-da3464e2986c?w=400&q=80',
+      [
+        'Kneel facing a high cable with a rope attachment.',
+        'Crunch by curling the ribs toward the pelvis.',
+        'Squeeze abs at the bottom.',
+        'Return without yanking the lower back.',
+        'Think “shorten the abs,” not “pull with the arms.”',
+      ]),
+    ex('Hanging leg raise', '3 × 10–12', 'Pull-up bar', 'Intermediate',
+      'https://images.unsplash.com/photo-1526506118085-60ce8714f8c5?w=400&q=80',
+      [
+        'Hang from a bar with a hollow body position.',
+        'Raise legs toward horizontal (or higher) without swinging.',
+        'Lower with control.',
+        'Bend the knees to make it easier.',
+        'Avoid kipping — own each rep.',
+      ]),
+    ex('Ab wheel rollout', '3 × 8–10', 'Ab wheel', 'Intermediate',
+      'https://images.unsplash.com/photo-1601986313624-28c11ac26334?w=400&q=80',
+      [
+        'Kneel with the wheel under the shoulders.',
+        'Roll forward while keeping the core braced.',
+        'Go only as far as you can without the low back sagging.',
+        'Pull back to the start by engaging abs and lats.',
+        'Short range first — progress distance slowly.',
+      ]),
+    ex('Russian twist', '3 × 20', 'Plate or bodyweight', 'Beginner',
+      'https://images.unsplash.com/photo-1607962776833-7ec9ef952784?w=400&q=80',
+      [
+        'Sit with knees bent; lean back slightly with a tall chest.',
+        'Rotate the torso side to side, touching the floor or plate each side.',
+        'Count each touch as one rep.',
+        'Keep the hips stable.',
+        'Lift the feet for more challenge once form is solid.',
+      ]),
+  ],
+  'Full Body': [
+    ex('Deadlift', '4 × 5', 'Barbell', 'Intermediate',
+      'https://images.unsplash.com/photo-1517963879433-6ad2b056d712?w=400&q=80',
+      [
+        'Stand with mid-foot under the bar; hinge and grip.',
+        'Set the back flat, brace, and push the floor away.',
+        'Stand tall with hips and knees locked.',
+        'Lower with control by hinging first.',
+        'Keep the bar close to the legs the entire time.',
+      ]),
+    ex('Goblet squat', '3 × 10–12', 'Kettlebell or dumbbell', 'Beginner',
+      'https://images.unsplash.com/photo-1649887974297-4be052375a67?w=400&q=80',
+      [
+        'Hold a dumbbell or kettlebell at the chest.',
+        'Squat down with elbows inside the knees.',
+        'Drive up through the mid-foot.',
+        'Keep the chest tall.',
+        'Great teaching squat — own depth before adding load.',
+      ]),
+    ex('Dumbbell row', '3 × 10 each', 'Dumbbell', 'Beginner',
+      'https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?w=400&q=80',
+      [
+        'Support one hand and knee on a bench; other foot on the floor.',
+        'Pull the dumbbell to the hip, elbow close.',
+        'Squeeze the back at the top.',
+        'Lower fully.',
+        'Switch sides after all reps.',
+      ]),
+    ex('Push-up', '3 × max', 'Bodyweight', 'Beginner',
+      'https://images.unsplash.com/photo-1598971457999-ca4ef48a9a71?w=400&q=80',
+      [
+        'High plank, hands under shoulders.',
+        'Lower chest toward the floor with a rigid torso.',
+        'Press up to full lockout.',
+        'Breathe out on the press.',
+        'Elevate hands on a bench to regress if needed.',
+      ]),
+    ex('Farmer carry', '3 × 30 m', 'Dumbbells or kettlebells', 'Beginner',
+      'https://images.unsplash.com/photo-1609899517237-77d357b047cf?w=400&q=80',
+      [
+        'Pick up heavy weights at your sides.',
+        'Stand tall and walk with short, controlled steps.',
+        'Keep ribs down and shoulders packed.',
+        'Turn carefully or set down at the end of the distance.',
+        'Do not let the weights pull you into a side lean.',
+      ]),
+    ex('Burpee', '2 × 10', 'Bodyweight', 'Intermediate',
+      'https://images.unsplash.com/photo-1599058917212-d750089bc07e?w=400&q=80',
+      [
+        'Squat down and place hands on the floor.',
+        'Jump or step the feet back to a plank.',
+        'Optional: chest-to-floor push-up.',
+        'Jump the feet forward and explode upward.',
+        'Land softly and reset for the next rep.',
+      ]),
+  ],
+};
+
+/** Simple home variants: prefer bodyweight / dumbbells when gym-only gear is listed. */
+function homeFriendly(list) {
+  return list.map((e) => {
+    const eq = String(e.equipment || '').toLowerCase();
+    if (eq.includes('cable') || eq.includes('machine') || eq.includes('rack') || eq.includes('pec deck')) {
+      return {
+        ...e,
+        equipment: 'Dumbbells or bodyweight',
+        tip: `${e.tip} At home, use dumbbells, bands, or bodyweight alternatives.`,
+      };
+    }
+    return e;
+  });
+}
+
+function exercisesFor(muscleGroup, environment) {
+  const key = Object.keys(GYM).find((k) => k.toLowerCase() === String(muscleGroup || '').trim().toLowerCase())
+    || 'Full Body';
+  const env = String(environment || 'gym').toLowerCase() === 'home' ? 'home' : 'gym';
+  const list = GYM[key] || GYM['Full Body'];
+  return env === 'home' ? homeFriendly(list) : list;
 }
 
 module.exports = { exercisesFor };
