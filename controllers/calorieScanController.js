@@ -7,6 +7,8 @@ const multer = require('multer');
 const sharp = require('sharp');
 const CalorieScan = require('../models/CalorieScan');
 const { buildAnalysis } = require('../services/calorieScanAnalysisService');
+const fatsecretFood = require('../services/fatsecretFoodService');
+const fatsecretClient = require('../services/fatsecretClient');
 
 const deleteFileIfExists = (filePath) => {
   if (!filePath) return;
@@ -70,6 +72,7 @@ async function analyzeMealHandler(req, res) {
     const description = String(req.body.description || '').trim();
     const healthGoal = String(req.body.healthGoal || '').trim();
     const mealType = String(req.body.mealType || 'lunch').trim().toLowerCase();
+    const scanMode = String(req.body.scanMode || 'scan_food').trim();
 
     if (!description && !req.file) {
       if (tempPath) deleteFileIfExists(tempPath);
@@ -99,11 +102,13 @@ async function analyzeMealHandler(req, res) {
       }
     }
 
-    const data = buildAnalysis({
+    const data = await buildAnalysis({
       description,
       healthGoal,
       mealType: ['breakfast', 'lunch', 'dinner', 'snack'].includes(mealType) ? mealType : 'lunch',
       imageHint,
+      imagePath: tempPath,
+      scanMode,
     });
 
     await CalorieScan.create({
@@ -113,7 +118,18 @@ async function analyzeMealHandler(req, res) {
       description,
       healthGoalUsed: healthGoal,
       analysis: data,
-      aiProvider: process.env.CALORIE_SCAN_AI_PROVIDER || 'sym-rules-v1',
+      aiProvider:
+        data.dataSource === 'rejected'
+          ? 'scan-gate'
+          : data.dataSource === 'fatsecret'
+            ? 'fatsecret'
+            : data.dataSource === 'vision'
+              ? 'openrouter-vision'
+              : data.dataSource === 'open_food_facts'
+                ? 'open-food-facts'
+                : data.dataSource === 'nutrition_facts_ocr'
+                  ? 'nutrition-facts-ocr'
+                  : process.env.CALORIE_SCAN_AI_PROVIDER || 'sym-rules-v1',
     });
 
     if (tempPath) deleteFileIfExists(tempPath);
@@ -181,6 +197,92 @@ async function deleteScan(req, res) {
   }
 }
 
+/**
+ * GET /api/calorie-scan/autocomplete?q=
+ * FatSecret foods.autocomplete (Premier).
+ */
+async function autocompleteFoods(req, res) {
+  try {
+    const q = String(req.query.q || req.query.expression || '').trim();
+    if (q.length < 2) {
+      return res.json({ success: true, data: { suggestions: [], provider: 'none' } });
+    }
+    if (!fatsecretClient.isConfigured()) {
+      return res.json({
+        success: true,
+        data: { suggestions: [], provider: 'unavailable' },
+      });
+    }
+    const suggestions = await fatsecretFood.autocomplete(q, 8);
+    return res.json({
+      success: true,
+      data: { suggestions, provider: 'fatsecret' },
+    });
+  } catch (err) {
+    console.error('[calorie-scan] autocomplete:', err);
+    return res.status(500).json({ success: false, message: 'autocomplete_failed' });
+  }
+}
+
+/**
+ * GET /api/calorie-scan/search?q=
+ */
+async function searchFoods(req, res) {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.json({ success: true, data: { foods: [], provider: 'none' } });
+    }
+    if (!fatsecretClient.isConfigured()) {
+      return res.json({
+        success: true,
+        data: { foods: [], provider: 'unavailable' },
+      });
+    }
+    const foods = await fatsecretFood.searchFoods(q, 15);
+    return res.json({ success: true, data: { foods, provider: 'fatsecret' } });
+  } catch (err) {
+    console.error('[calorie-scan] search:', err);
+    return res.status(500).json({ success: false, message: 'search_failed' });
+  }
+}
+
+/**
+ * GET /api/calorie-scan/recipes?q=
+ */
+async function searchRecipes(req, res) {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.json({ success: true, data: { recipes: [], provider: 'none' } });
+    }
+    if (!fatsecretClient.isConfigured()) {
+      return res.json({
+        success: true,
+        data: { recipes: [], provider: 'unavailable' },
+      });
+    }
+    const recipes = await fatsecretFood.searchRecipes(q, 12);
+    return res.json({ success: true, data: { recipes, provider: 'fatsecret' } });
+  } catch (err) {
+    console.error('[calorie-scan] recipes:', err);
+    return res.status(500).json({ success: false, message: 'recipes_failed' });
+  }
+}
+
+/**
+ * GET /api/calorie-scan/provider-status
+ */
+async function providerStatus(req, res) {
+  return res.json({
+    success: true,
+    data: {
+      fatsecretConfigured: fatsecretClient.isConfigured(),
+      region: process.env.FATSECRET_REGION || 'US',
+    },
+  });
+}
+
 function handleUploadErrors(fn) {
   return (req, res, next) => {
     uploadMealImage(req, res, (err) => {
@@ -203,4 +305,8 @@ module.exports = {
   uploadMealImage,
   listHistory,
   deleteScan,
+  autocompleteFoods,
+  searchFoods,
+  searchRecipes,
+  providerStatus,
 };
