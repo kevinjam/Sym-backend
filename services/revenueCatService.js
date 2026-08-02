@@ -98,6 +98,17 @@ const ANNUAL_PLAN_FEATURE = {
   subtitle: 'AI-compiled data summary with insights',
 };
 
+const LITE_PLAN_FEATURES = [
+  {
+    title: 'Calorie Scan',
+    subtitle: 'Photo food recognition with FatSecret nutrition data',
+  },
+  {
+    title: 'Exercise Plans',
+    subtitle: 'Create custom workout routines tailored to your fitness goals',
+  },
+];
+
 function monthlyPlanFeatures() {
   return [...BASE_PLAN_FEATURES];
 }
@@ -106,12 +117,16 @@ function annualPlanFeatures() {
   return [...BASE_PLAN_FEATURES, ANNUAL_PLAN_FEATURE];
 }
 
+function litePlanFeatures() {
+  return [...LITE_PLAN_FEATURES];
+}
+
 /**
- * Plan catalog — configured server-side (sync with RevenueCat dashboard).
+ * Plan catalog — Flo-style trial + no-trial options (sync with RevenueCat).
  * Override via REVENUECAT_PLANS JSON env var.
  */
 function getPlanCatalog() {
-  const trialDays = parseInt(process.env.REVENUECAT_TRIAL_DAYS || '7', 10);
+  const trialDays = parseInt(process.env.REVENUECAT_TRIAL_DAYS || '14', 10);
   const raw = process.env.REVENUECAT_PLANS;
 
   if (raw) {
@@ -125,32 +140,73 @@ function getPlanCatalog() {
     }
   }
 
+  const annualProductId =
+    process.env.REVENUECAT_IOS_ANNUAL_PRODUCT_ID || 'sym_premium_annual';
+  const annualProductIdAndroid =
+    process.env.REVENUECAT_ANDROID_ANNUAL_PRODUCT_ID || 'sym_premium_annual';
+  const annualPrice =
+    process.env.REVENUECAT_ANNUAL_PRICE_DISPLAY || '$59.99';
+  const litePrice =
+    process.env.REVENUECAT_LITE_PRICE_DISPLAY || '$47.99';
+  const monthlyPrice =
+    process.env.REVENUECAT_MONTHLY_PRICE_DISPLAY || '$14.99';
+
   return {
     trialDays,
     packages: [
       {
+        id: 'annual_trial',
+        packageType: 'annual',
+        title: 'Yearly Plan',
+        description: '12 months with free trial',
+        storeProductId: annualProductId,
+        storeProductIdAndroid: annualProductIdAndroid,
+        priceString: annualPrice,
+        recommended: false,
+        offersTrial: true,
+        features: annualPlanFeatures(),
+      },
+      {
         id: 'annual',
         packageType: 'annual',
-        title: 'Annual Plan',
-        description: 'Best value — billed yearly',
-        storeProductId: process.env.REVENUECAT_IOS_ANNUAL_PRODUCT_ID || 'sym_premium_annual',
-        storeProductIdAndroid:
-          process.env.REVENUECAT_ANDROID_ANNUAL_PRODUCT_ID || 'sym_premium_annual',
-        priceString: process.env.REVENUECAT_ANNUAL_PRICE_DISPLAY || '$57.99',
+        title: 'Yearly Plan',
+        description: '12 months · full premium',
+        storeProductId: annualProductId,
+        storeProductIdAndroid: annualProductIdAndroid,
+        priceString: annualPrice,
         recommended: true,
+        offersTrial: false,
         features: annualPlanFeatures(),
+      },
+      {
+        id: 'calorie_scan',
+        packageType: 'annual_lite',
+        title: 'Calorie scan & exercise plans',
+        description: '12 months · focused tools',
+        storeProductId:
+          process.env.REVENUECAT_IOS_LITE_PRODUCT_ID ||
+          'sym_premium_calorie_scan_annual',
+        storeProductIdAndroid:
+          process.env.REVENUECAT_ANDROID_LITE_PRODUCT_ID ||
+          'sym_premium_calorie_scan_annual',
+        priceString: litePrice,
+        recommended: false,
+        offersTrial: false,
+        features: litePlanFeatures(),
       },
       {
         id: 'monthly',
         packageType: 'monthly',
-        title: 'Monthly Plan',
+        title: 'Monthly',
         description: 'Cancel anytime',
         storeProductId:
           process.env.REVENUECAT_IOS_MONTHLY_PRODUCT_ID || 'sym_premium_monthly',
         storeProductIdAndroid:
-          process.env.REVENUECAT_ANDROID_MONTHLY_PRODUCT_ID || 'sym_premium_monthly',
-        priceString: process.env.REVENUECAT_MONTHLY_PRICE_DISPLAY || '$7.99',
+          process.env.REVENUECAT_ANDROID_MONTHLY_PRODUCT_ID ||
+          'sym_premium_monthly',
+        priceString: monthlyPrice,
         recommended: false,
+        offersTrial: false,
         features: monthlyPlanFeatures(),
       },
     ],

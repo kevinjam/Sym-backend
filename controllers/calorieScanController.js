@@ -118,18 +118,26 @@ async function analyzeMealHandler(req, res) {
       description,
       healthGoalUsed: healthGoal,
       analysis: data,
-      aiProvider:
-        data.dataSource === 'rejected'
-          ? 'scan-gate'
-          : data.dataSource === 'fatsecret'
-            ? 'fatsecret'
-            : data.dataSource === 'vision'
-              ? 'openrouter-vision'
-              : data.dataSource === 'open_food_facts'
-                ? 'open-food-facts'
-                : data.dataSource === 'nutrition_facts_ocr'
-                  ? 'nutrition-facts-ocr'
-                  : process.env.CALORIE_SCAN_AI_PROVIDER || 'sym-rules-v1',
+      aiProvider: (() => {
+        switch (data.dataSource) {
+          case 'rejected':
+            return 'scan-gate';
+          case 'fatsecret':
+            return 'fatsecret-image-recognition';
+          case 'vision_grounded':
+            return 'openrouter-vision+fatsecret';
+          case 'vision':
+            return 'openrouter-vision';
+          case 'menu_label':
+            return 'menu-ocr+fatsecret';
+          case 'open_food_facts':
+            return 'open-food-facts';
+          case 'nutrition_facts_ocr':
+            return 'nutrition-facts-ocr';
+          default:
+            return process.env.CALORIE_SCAN_AI_PROVIDER || 'sym-rules-v1';
+        }
+      })(),
     });
 
     if (tempPath) deleteFileIfExists(tempPath);
@@ -278,7 +286,14 @@ async function providerStatus(req, res) {
     success: true,
     data: {
       fatsecretConfigured: fatsecretClient.isConfigured(),
-      region: process.env.FATSECRET_REGION || 'US',
+      region: fatsecretClient.region(),
+      language: fatsecretClient.language(),
+      imageRecognition: true,
+      pipeline: [
+        'fatsecret_image_recognition_us_en',
+        'menu_ocr_grounded',
+        'openrouter_vision_fallback',
+      ],
     },
   });
 }

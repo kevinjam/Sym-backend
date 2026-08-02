@@ -98,7 +98,44 @@ function parseNutritionFactsLabel(text) {
   };
 }
 
+/**
+ * Menu / price-tag calorie callouts like "Butter Croissant (280 Calories)" or "391 kcal".
+ * Used in scan_food to prefer labeled calories over pure visual guesses.
+ * @param {string} text
+ * @returns {{ name: string|null, calories: number }|null}
+ */
+function extractMenuCalorieCallout(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return null;
+
+  const patterns = [
+    /([A-Za-z][A-Za-z0-9'’&\- ]{2,40}?)\s*\(\s*(\d{2,4})\s*(?:calories?|kcal|cals?)\s*\)/i,
+    /([A-Za-z][A-Za-z0-9'’&\- ]{2,40}?)\s*[-–:]\s*(\d{2,4})\s*(?:calories?|kcal|cals?)\b/i,
+    /(\d{2,4})\s*(?:calories?|kcal|cals?)\b/i,
+  ];
+
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (!m) continue;
+    let name = null;
+    let cal = null;
+    if (m.length >= 3 && m[2] != null) {
+      name = String(m[1]).trim().replace(/\s+/g, ' ').slice(0, 48);
+      cal = Number(m[2]);
+    } else if (m[1] != null) {
+      cal = Number(m[1]);
+    }
+    if (!Number.isFinite(cal) || cal < 40 || cal > 2500) continue;
+    if (name && /nutrition|serving|total|daily|amount/i.test(name)) {
+      name = null;
+    }
+    return { name, calories: Math.round(cal) };
+  }
+  return null;
+}
+
 module.exports = {
   ocrImage,
   parseNutritionFactsLabel,
+  extractMenuCalorieCallout,
 };

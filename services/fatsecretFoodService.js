@@ -218,11 +218,39 @@ async function searchFoods(expression, maxResults = 12) {
 
 /**
  * Resolve best food match for free text → full product nutrition.
+ * Tries several query variants so "Seeded Butter Croissant" still hits "Croissant".
  */
 async function resolveFoodFromText(expression) {
-  const hits = await searchFoods(expression, 5);
-  if (!hits.length) return null;
-  return getFoodById(hits[0].foodId);
+  const raw = String(expression || '').trim();
+  if (!raw) return null;
+
+  const variants = [];
+  const push = (q) => {
+    const s = String(q || '').trim().replace(/\s+/g, ' ');
+    if (s.length >= 2 && !variants.includes(s)) variants.push(s);
+  };
+  push(raw);
+  push(raw.replace(/\b(fresh|homemade|bakery|artisan|organic|large|small|medium)\b/gi, ' '));
+  const words = raw.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) push(words.slice(-2).join(' '));
+  if (words.length >= 1) push(words[words.length - 1]);
+
+  for (const q of variants) {
+    const hits = await searchFoods(q, 8);
+    if (!hits.length) continue;
+    // Prefer generic / exact-ish names over unrelated branded hits.
+    const ql = q.toLowerCase();
+    const ranked = [...hits].sort((a, b) => {
+      const an = String(a.name || '').toLowerCase();
+      const bn = String(b.name || '').toLowerCase();
+      const as = (an === ql ? 0 : an.includes(ql) ? 1 : 2);
+      const bs = (bn === ql ? 0 : bn.includes(ql) ? 1 : 2);
+      return as - bs;
+    });
+    const product = await getFoodById(ranked[0].foodId);
+    if (product && product.calories > 0) return product;
+  }
+  return null;
 }
 
 async function searchRecipes(expression, maxResults = 10) {
@@ -259,29 +287,74 @@ async function searchRecipes(expression, maxResults = 10) {
 }
 
 /**
- * Image recognition → Sym product list.
+ * Image recognition → Sym product list (US / English FatSecret dataset).
  * https://platform.fatsecret.com/docs/v2/image.recognition
+ *
+ * FatSecret recommends 256×256 or 512×512 JPEG/PNG/WebP and ≤ ~1MB request body.
+ * We always downscale a dedicated IR copy to 512px before calling the API.
  */
 async function recognizeImage(imagePath) {
   if (!fatsecret.isConfigured() || !imagePath || !fs.existsSync(imagePath)) {
     return null;
   }
 
-  // Keep payload under FatSecret's ~1M char base64 limit — resize already done upstream.
-  const buf = fs.readFileSync(imagePath);
-  if (buf.length > 700_000) {
-    console.warn('[fatsecret] image too large for recognition, skipping');
-    return null;
+  let imageB64;
+  try {
+    // Dedicated IR-sized JPEG (FatSecret best practice: 512×512).
+    const sharp = require('sharp');
+    const buf = await sharp(imagePath)
+      .rotate()
+      .resize({
+        width: 512,
+        height: 512,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer();
+
+    // ~1.09MB file / ~1M char base64 body limit — keep well under.
+    if (buf.length > 750_000) {
+      console.warn(
+        `[fatsecret] IR image still large (${buf.length} bytes) — compressing further`,
+      );
+      const smaller = await sharp(buf)
+        .resize({ width: 384, height: 384, fit: 'inside' })
+        .jpeg({ quality: 72 })
+        .toBuffer();
+      imageB64 = smaller.toString('base64');
+    } else {
+      imageB64 = buf.toString('base64');
+    }
+  } catch (e) {
+    console.warn('[fatsecret] IR resize failed, using original file:', e.message);
+    const raw = fs.readFileSync(imagePath);
+    if (raw.length > 700_000) {
+      console.warn('[fatsecret] image too large for recognition, skipping');
+      return null;
+    }
+    imageB64 = raw.toString('base64');
   }
-  const imageB64 = buf.toString('base64');
 
   try {
     const data = await fatsecret.imageRecognitionV2({
       imageB64,
       includeFoodData: true,
+      region: 'US',
+      language: 'en',
     });
-    const responses = fatsecret.asArray(data?.food_response);
-    if (!responses.length) return null;
+
+    const responses = fatsecret.asArray(
+      data?.food_response || data?.food_responses || data?.foods,
+    );
+    if (!responses.length) {
+      console.info('[fatsecret] image recognition: no food_response items');
+      return null;
+    }
+
+    console.info(
+      `[fatsecret] image recognition: ${responses.length} food(s) (region=US, language=en)`,
+    );
 
     const items = [];
     for (const row of responses) {
@@ -297,13 +370,15 @@ async function recognizeImage(imagePath) {
           ? `${units} ${singular}`
           : `${units} serving${units === 1 ? '' : 's'}`);
 
+      const foodId = row.food_id || row.food?.food_id;
+
       // Prefer embedded food data when include_food_data returned a food object.
       let product = null;
       if (row.food) {
         product = mapFoodToProduct(row.food);
       }
-      if (!product && row.food_id) {
-        product = await getFoodById(row.food_id);
+      if (!product && foodId) {
+        product = await getFoodById(foodId);
       }
 
       if (product) {
@@ -322,13 +397,16 @@ async function recognizeImage(imagePath) {
           row.food_entry_name ||
           eaten.food_name_singular ||
           product.name;
+        product.source = 'fatsecret';
+        product.recognitionMethod = 'image_recognition_v2';
         if (product.calories > 0) {
           items.push(product);
         }
       } else if (nutrients.calories != null && n(nutrients.calories) > 0) {
         items.push({
           source: 'fatsecret',
-          foodId: String(row.food_id || ''),
+          recognitionMethod: 'image_recognition_v2',
+          foodId: String(foodId || ''),
           servingId: String(suggested.serving_id || ''),
           barcode: null,
           name: String(
@@ -350,6 +428,10 @@ async function recognizeImage(imagePath) {
 
     return items.length ? items : null;
   } catch (err) {
+    if (err.code === 'FS_NUTRITION_LABEL_ONLY') {
+      console.info('[fatsecret] image looks like a nutrition label only — skip IR');
+      return null;
+    }
     console.warn('[fatsecret] image recognition:', err.message);
     return null;
   }

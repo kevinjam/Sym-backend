@@ -33,11 +33,15 @@ function defaultScope() {
 }
 
 function region() {
-  return process.env.FATSECRET_REGION || 'US';
+  // Always default to United States for Calorie Scan consistency.
+  const r = String(process.env.FATSECRET_REGION || 'US').trim().toUpperCase();
+  return r || 'US';
 }
 
 function language() {
-  return process.env.FATSECRET_LANGUAGE || 'en';
+  // Language is ignored by FatSecret unless region is also set — we always send both.
+  const l = String(process.env.FATSECRET_LANGUAGE || 'en').trim().toLowerCase();
+  return l || 'en';
 }
 
 async function getAccessToken() {
@@ -142,15 +146,18 @@ async function restMethod(params) {
 
 /**
  * Image Recognition v2 — Premier + image-recognition scope.
- * @param {{ imageB64: string, includeFoodData?: boolean, eatenFoods?: object[] }} opts
+ * Always sends region=US + language=en (unless env overrides).
+ * Docs: https://platform.fatsecret.com/docs/v2/image.recognition
+ * @param {{ imageB64: string, includeFoodData?: boolean, eatenFoods?: object[], region?: string, language?: string }} opts
  */
 async function imageRecognitionV2(opts) {
   const token = await getAccessToken();
   const payload = {
     image_b64: opts.imageB64,
     include_food_data: opts.includeFoodData !== false,
-    region: region(),
-    language: language(),
+    // Localization: United States / English (language requires region).
+    region: opts.region || region(),
+    language: opts.language || language(),
   };
   if (Array.isArray(opts.eatenFoods) && opts.eatenFoods.length) {
     payload.eaten_foods = opts.eatenFoods;
@@ -166,10 +173,17 @@ async function imageRecognitionV2(opts) {
   });
 
   if (res.status < 200 || res.status >= 300) {
+    const code = res.data?.error?.code;
     const msg =
       res.data?.error?.message ||
       res.data?.message ||
       `image_recognition_http_${res.status}`;
+    // 211 = nutrition-facts-only image (by design) — treat as no foods found.
+    if (String(code) === '211') {
+      const err = new Error(`FatSecret image recognition: nutrition label only (${msg})`);
+      err.code = 'FS_NUTRITION_LABEL_ONLY';
+      throw err;
+    }
     throw new Error(`FatSecret image recognition failed: ${msg}`);
   }
   return res.data;

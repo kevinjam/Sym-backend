@@ -52,6 +52,7 @@ const subscriptionRoutes = require('./routes/subscription');
 const audioRoutes = require('./routes/audio');
 const userRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
+const supplementOptimizerRoutes = require('./routes/supplementOptimizer');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const schedulerService = require('./utils/scheduler');
@@ -180,6 +181,7 @@ app.use('/api/widgets', widgetsRoutes);
 app.use('/api/thesis', thesisChatRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/audio', audioRoutes);
+app.use('/api/supplements', supplementOptimizerRoutes);
 
 // CORS test endpoint
 app.get('/api/cors-test', (req, res) => {
