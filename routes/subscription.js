@@ -7,20 +7,20 @@ const {
   getStatus,
   getPlans,
   getStoreConfig,
+  createCheckout,
+  createPortal,
   syncSubscription,
   restoreSubscription,
-  handleWebhook,
 } = require('../controllers/subscriptionController');
 
-// RevenueCat webhook (public — verified via REVENUECAT_WEBHOOK_AUTH)
-router.post('/webhook', handleWebhook);
-
-// Public store SDK keys (RevenueCat public keys only — safe to expose)
+// Public Stripe publishable config (no secrets)
 router.get('/store-config', getStoreConfig);
 
 // Authenticated subscription APIs
 router.get('/status', authenticateToken, getStatus);
 router.get('/plans', authenticateToken, getPlans);
+router.post('/checkout', authenticateToken, createCheckout);
+router.post('/portal', authenticateToken, createPortal);
 router.post('/sync', authenticateToken, syncSubscription);
 router.post('/restore', authenticateToken, restoreSubscription);
 
