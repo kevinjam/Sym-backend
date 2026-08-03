@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const userSubscriptionSchema = new mongoose.Schema(
   {
-    /** Sym Mongo user id — set when app_user_id is a valid ObjectId (logged-in user). */
+    /** Sym Mongo user id — set when app user id is a valid ObjectId. */
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -12,13 +12,24 @@ const userSubscriptionSchema = new mongoose.Schema(
       sparse: true,
       unique: true,
     },
-    /** RevenueCat app_user_id — always stored as string (Mongo id or anonymous UUID). */
+    /** Canonical app user id string (Sym Mongo id). */
+    appUserId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    /**
+     * Legacy unique key from RevenueCat era — still required/unique for existing rows.
+     * Kept equal to appUserId for Stripe.
+     */
     revenueCatAppUserId: {
       type: String,
       required: true,
       unique: true,
       index: true,
     },
+    stripeCustomerId: { type: String, default: null, index: true },
+    stripeSubscriptionId: { type: String, default: null, index: true },
     hasPremium: { type: Boolean, default: false },
     isOnTrial: { type: Boolean, default: false },
     entitlementId: { type: String, default: null },
