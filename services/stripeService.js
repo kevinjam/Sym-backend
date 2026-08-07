@@ -83,7 +83,7 @@ const ANNUAL_PLAN_FEATURE = {
 const LITE_PLAN_FEATURES = [
   {
     title: 'Calorie Scan',
-    subtitle: 'Photo food recognition with FatSecret nutrition data',
+    subtitle: 'Photo food recognition with nutrition data',
   },
   {
     title: 'Exercise Plans',
@@ -297,6 +297,515 @@ async function createBillingPortalSession({ customerId, returnUrl }) {
   return { url: session.url };
 }
 
+function planTitleForPriceId(priceId) {
+  const catalog = getPlanCatalog();
+  const match = catalog.packages.find((p) => p.storeProductId === priceId);
+  return match?.title || null;
+}
+
+function planIdForPriceId(priceId) {
+  const catalog = getPlanCatalog();
+  const match = catalog.packages.find((p) => p.storeProductId === priceId);
+  return match?.id || null;
+}
+
+function centsToDollars(cents) {
+  if (cents == null || Number.isNaN(Number(cents))) return 0;
+  return Number(cents) / 100;
+}
+
+function mapInvoice(inv) {
+  const lines = (inv.lines?.data || []).map((line) => ({
+    id: line.id,
+    description:
+      line.description ||
+      line.price?.nickname ||
+      line.plan?.nickname ||
+      'Subscription',
+    quantity: line.quantity || 1,
+    amount: centsToDollars(line.amount),
+    currency: (line.currency || inv.currency || 'usd').toUpperCase(),
+    periodStart: line.period?.start
+      ? new Date(line.period.start * 1000).toISOString()
+      : null,
+    periodEnd: line.period?.end
+      ? new Date(line.period.end * 1000).toISOString()
+      : null,
+  }));
+
+  return {
+    id: inv.id,
+    number: inv.number || inv.id,
+    status: inv.status,
+    amountDue: centsToDollars(inv.amount_due),
+    amountPaid: centsToDollars(inv.amount_paid),
+    subtotal: centsToDollars(inv.subtotal),
+    tax: centsToDollars(inv.tax || 0),
+    total: centsToDollars(inv.total),
+    currency: (inv.currency || 'usd').toUpperCase(),
+    createdAt: inv.created
+      ? new Date(inv.created * 1000).toISOString()
+      : null,
+    periodStart: inv.period_start
+      ? new Date(inv.period_start * 1000).toISOString()
+      : null,
+    periodEnd: inv.period_end
+      ? new Date(inv.period_end * 1000).toISOString()
+      : null,
+    paidAt: inv.status_transitions?.paid_at
+      ? new Date(inv.status_transitions.paid_at * 1000).toISOString()
+      : null,
+    lines,
+  };
+}
+
+/**
+ * Full invoice for in-app detail (no hosted Stripe invoice URL).
+ */
+async function getInvoiceDetails(customerId, invoiceId) {
+  const stripe = stripeClient();
+  const inv = await stripe.invoices.retrieve(invoiceId, {
+    expand: ['lines.data.price', 'charge', 'customer'],
+  });
+  const invoiceCustomer =
+    typeof inv.customer === 'string' ? inv.customer : inv.customer?.id;
+  if (invoiceCustomer !== customerId) {
+    const err = new Error('Invoice does not belong to this customer.');
+    err.code = 'INVOICE_FORBIDDEN';
+    throw err;
+  }
+  return mapInvoice(inv);
+}
+
+/**
+ * Rich billing snapshot for the in-app Manage Billing screen.
+ */
+async function getBillingDetails(customerId) {
+  const stripe = stripeClient();
+  const subscription = await fetchActiveSubscriptionForCustomer(customerId);
+  const mapped = mapSubscriptionToStatus(subscription);
+
+  let paymentMethod = null;
+  const customer = await stripe.customers.retrieve(customerId, {
+    expand: ['invoice_settings.default_payment_method'],
+  });
+
+  const defaultPm =
+    customer?.invoice_settings?.default_payment_method ||
+    customer?.default_source ||
+    null;
+
+  let pm = defaultPm;
+  if (!pm && subscription?.default_payment_method) {
+    pm =
+      typeof subscription.default_payment_method === 'string'
+        ? await stripe.paymentMethods.retrieve(subscription.default_payment_method)
+        : subscription.default_payment_method;
+  } else if (pm && typeof pm === 'string') {
+    pm = await stripe.paymentMethods.retrieve(pm);
+  }
+
+  if (pm && pm.card) {
+    paymentMethod = {
+      brand: pm.card.brand || 'card',
+      last4: pm.card.last4 || '',
+      expMonth: pm.card.exp_month || null,
+      expYear: pm.card.exp_year || null,
+    };
+  }
+
+  const price = subscription?.items?.data?.[0]?.price || null;
+  const priceId = price?.id || mapped.productIdentifier;
+  const unitAmount = price?.unit_amount != null ? price.unit_amount / 100 : null;
+  const currency = (price?.currency || 'usd').toUpperCase();
+  const interval = price?.recurring?.interval || null;
+
+  const invoicesRaw = await stripe.invoices.list({
+    customer: customerId,
+    limit: 12,
+    expand: ['data.charge', 'data.payment_intent'],
+  });
+  const invoices = invoicesRaw.data.map((inv) => mapInvoice(inv));
+
+  return {
+    ...mapped,
+    cancelAtPeriodEnd: Boolean(subscription?.cancel_at_period_end),
+    planId: planIdForPriceId(priceId),
+    planTitle: planTitleForPriceId(priceId) || 'SymWellness Premium',
+    priceAmount: unitAmount,
+    priceCurrency: currency,
+    priceInterval: interval,
+    priceString:
+      unitAmount != null
+        ? `$${unitAmount.toFixed(2)}${interval === 'year' ? ' / year' : interval === 'month' ? ' / month' : ''}`
+        : null,
+    paymentMethod,
+    invoices,
+  };
+}
+
+async function cancelSubscriptionAtPeriodEnd(subscriptionId) {
+  const stripe = stripeClient();
+  return stripe.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: true,
+  });
+}
+
+async function resumeSubscription(subscriptionId) {
+  const stripe = stripeClient();
+  return stripe.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: false,
+  });
+}
+
+/**
+ * Switch the active subscription to another catalog plan (prorated).
+ */
+async function changeSubscriptionPlan(subscriptionId, planId) {
+  const stripe = stripeClient();
+  const { plan, priceId } = resolvePriceIdForPlan(planId);
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const itemId = subscription.items?.data?.[0]?.id;
+  if (!itemId) {
+    const err = new Error('Subscription has no billable item to update.');
+    err.code = 'NO_SUBSCRIPTION_ITEM';
+    throw err;
+  }
+
+  const updated = await stripe.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: false,
+    proration_behavior: 'create_prorations',
+    items: [{ id: itemId, price: priceId }],
+    metadata: {
+      ...(subscription.metadata || {}),
+      planId: plan.id,
+    },
+  });
+  return updated;
+}
+
+/**
+ * SetupIntent + ephemeral key so the app can collect a new card via PaymentSheet.
+ */
+async function createSetupPaymentMethodSession({ customerId }) {
+  const stripe = stripeClient();
+  // Ephemeral keys must declare an API version; keep it aligned with the
+  // installed stripe Node SDK (avoids outdated-version warnings).
+  const apiVersion =
+    process.env.STRIPE_API_VERSION || Stripe.API_VERSION || '2026-07-29.dahlia';
+  const ephemeralKey = await stripe.ephemeralKeys.create(
+    { customer: customerId },
+    { apiVersion },
+  );
+  const setupIntent = await stripe.setupIntents.create({
+    customer: customerId,
+    payment_method_types: ['card'],
+    usage: 'off_session',
+  });
+  return {
+    customerId,
+    ephemeralKey: ephemeralKey.secret,
+    setupIntentClientSecret: setupIntent.client_secret,
+    publishableKey: getPublishableKey(),
+  };
+}
+
+/**
+ * Create a subscription + PaymentSheet secrets (in-app, no hosted Checkout).
+ * Trial plans use SetupIntent; paid plans use PaymentIntent on the first invoice.
+ */
+async function createSubscriptionPaymentSheet({
+  userId,
+  email,
+  name,
+  planId,
+  existingCustomerId,
+}) {
+  const stripe = stripeClient();
+  const { plan, priceId, trialDays } = resolvePriceIdForPlan(planId);
+  const customer = await ensureCustomer({
+    userId,
+    email,
+    name,
+    existingCustomerId,
+  });
+
+  // Don't start a second paid sub if one is already live.
+  const existingActive = await fetchActiveSubscriptionForCustomer(customer.id);
+  if (
+    existingActive &&
+    (existingActive.status === 'active' || existingActive.status === 'trialing')
+  ) {
+    const err = new Error('You already have an active SymWellness Premium subscription.');
+    err.code = 'ALREADY_SUBSCRIBED';
+    throw err;
+  }
+
+  // Clear abandoned PaymentSheet attempts so the customer isn't stuck.
+  await cancelIncompleteSubscriptions(customer.id);
+
+  const subscriptionParams = {
+    customer: customer.id,
+    items: [{ price: priceId }],
+    payment_behavior: 'default_incomplete',
+    payment_settings: {
+      save_default_payment_method: 'on_subscription',
+      // Card only — Apple Pay / Google Pay still appear as card wallets.
+      // Excludes Klarna, Cash App, Amazon Pay, bank/ACH, etc.
+      payment_method_types: ['card'],
+    },
+    metadata: {
+      symUserId: String(userId),
+      planId: plan.id,
+    },
+    // API 2025-03-31.basil+ removed invoice.payment_intent — use confirmation_secret.
+    expand: ['latest_invoice.confirmation_secret', 'pending_setup_intent'],
+  };
+
+  if (plan.offersTrial && trialDays > 0) {
+    subscriptionParams.trial_period_days = trialDays;
+  }
+
+  const subscription = await stripe.subscriptions.create(subscriptionParams);
+
+  const apiVersion =
+    process.env.STRIPE_API_VERSION || Stripe.API_VERSION || '2026-07-29.dahlia';
+  const ephemeralKey = await stripe.ephemeralKeys.create(
+    { customer: customer.id },
+    { apiVersion },
+  );
+
+  const secrets = await resolveSubscriptionClientSecrets(stripe, subscription);
+  if (!secrets.clientSecret) {
+    console.error('[Stripe] Missing client secret after subscription create', {
+      subscriptionId: subscription.id,
+      status: subscription.status,
+      pendingSetupIntent: subscription.pending_setup_intent,
+      latestInvoice:
+        typeof subscription.latest_invoice === 'object'
+          ? {
+              id: subscription.latest_invoice.id,
+              status: subscription.latest_invoice.status,
+              confirmation_secret: subscription.latest_invoice.confirmation_secret,
+              payment_intent: subscription.latest_invoice.payment_intent,
+            }
+          : subscription.latest_invoice,
+    });
+    const err = new Error(
+      'Unable to prepare in-app checkout for this plan. Please try again.',
+    );
+    err.code = 'MISSING_CLIENT_SECRET';
+    throw err;
+  }
+
+  return {
+    customerId: customer.id,
+    ephemeralKey: ephemeralKey.secret,
+    clientSecret: secrets.clientSecret,
+    paymentIntentClientSecret: secrets.paymentIntentClientSecret,
+    setupIntentClientSecret: secrets.setupIntentClientSecret,
+    subscriptionId: subscription.id,
+    publishableKey: getPublishableKey(),
+    planId: plan.id,
+    requiresAction: secrets.requiresAction,
+    // Wallet checkout (Apple Pay / Google Pay) — no card form.
+    currency: secrets.currency || 'usd',
+    amount: secrets.amount || plan.priceString?.replace(/[^0-9.]/g, '') || '0',
+    label: plan.title || 'SymWellness Premium',
+    merchantCountryCode: process.env.STRIPE_MERCHANT_COUNTRY || 'US',
+  };
+}
+
+/**
+ * Extract PaymentSheet client_secret for a newly created subscription.
+ * Supports modern (confirmation_secret) and legacy (payment_intent) APIs,
+ * plus trial SetupIntents via pending_setup_intent.
+ */
+async function resolveSubscriptionClientSecrets(stripe, subscription) {
+  let paymentIntentClientSecret = null;
+  let setupIntentClientSecret = null;
+  let requiresAction = 'payment';
+  let currency = 'usd';
+  let amount = '0';
+
+  // 1) Trial / $0 first invoice → SetupIntent
+  let pendingSetup = subscription.pending_setup_intent;
+  if (typeof pendingSetup === 'string') {
+    pendingSetup = await stripe.setupIntents.retrieve(pendingSetup);
+  }
+  if (pendingSetup?.client_secret) {
+    setupIntentClientSecret = pendingSetup.client_secret;
+    requiresAction = 'setup';
+    // Recurring price for Apple Pay display (trial charges $0 now).
+    const item = subscription.items?.data?.[0];
+    const unitAmount = item?.price?.unit_amount;
+    currency = (item?.price?.currency || 'usd').toLowerCase();
+    if (typeof unitAmount === 'number') {
+      amount = (unitAmount / 100).toFixed(2);
+    }
+    return {
+      clientSecret: setupIntentClientSecret,
+      paymentIntentClientSecret,
+      setupIntentClientSecret,
+      requiresAction,
+      currency,
+      amount: '0.00',
+      recurringAmount: amount,
+    };
+  }
+
+  // 2) Load latest invoice (may be an id string)
+  let invoice = subscription.latest_invoice;
+  if (typeof invoice === 'string') {
+    invoice = await stripe.invoices.retrieve(invoice, {
+      expand: ['confirmation_secret', 'payment_intent'],
+    });
+  } else if (invoice && typeof invoice === 'object' && !invoice.confirmation_secret) {
+    try {
+      invoice = await stripe.invoices.retrieve(invoice.id, {
+        expand: ['confirmation_secret', 'payment_intent'],
+      });
+    } catch (_) {
+      // keep original invoice object
+    }
+  }
+
+  if (invoice) {
+    currency = (invoice.currency || 'usd').toLowerCase();
+    if (typeof invoice.amount_due === 'number') {
+      amount = (invoice.amount_due / 100).toFixed(2);
+    } else if (typeof invoice.total === 'number') {
+      amount = (invoice.total / 100).toFixed(2);
+    }
+  }
+
+  // 3) Modern API: confirmation_secret.client_secret
+  const confirmationSecret =
+    invoice?.confirmation_secret?.client_secret ||
+    (typeof invoice?.confirmation_secret === 'string'
+      ? invoice.confirmation_secret
+      : null);
+  if (confirmationSecret) {
+    paymentIntentClientSecret = confirmationSecret;
+    requiresAction = 'payment';
+    return {
+      clientSecret: paymentIntentClientSecret,
+      paymentIntentClientSecret,
+      setupIntentClientSecret,
+      requiresAction,
+      currency,
+      amount,
+    };
+  }
+
+  // 4) Legacy API: invoice.payment_intent.client_secret
+  let paymentIntent = invoice?.payment_intent;
+  if (typeof paymentIntent === 'string') {
+    paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+  }
+  if (paymentIntent?.client_secret) {
+    paymentIntentClientSecret = paymentIntent.client_secret;
+    requiresAction = 'payment';
+    if (typeof paymentIntent.amount === 'number') {
+      amount = (paymentIntent.amount / 100).toFixed(2);
+    }
+    currency = (paymentIntent.currency || currency).toLowerCase();
+    return {
+      clientSecret: paymentIntentClientSecret,
+      paymentIntentClientSecret,
+      setupIntentClientSecret,
+      requiresAction,
+      currency,
+      amount,
+    };
+  }
+
+  // 5) Last resort for trials — create SetupIntent
+  if (
+    subscription.status === 'trialing' ||
+    subscription.status === 'incomplete' ||
+    subscription.trial_end
+  ) {
+    const customerId =
+      typeof subscription.customer === 'string'
+        ? subscription.customer
+        : subscription.customer?.id;
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customerId,
+      usage: 'off_session',
+      payment_method_types: ['card'],
+      metadata: {
+        symSubscriptionId: subscription.id,
+      },
+    });
+    setupIntentClientSecret = setupIntent.client_secret;
+    requiresAction = 'setup';
+    return {
+      clientSecret: setupIntentClientSecret,
+      paymentIntentClientSecret,
+      setupIntentClientSecret,
+      requiresAction,
+      currency,
+      amount: '0.00',
+    };
+  }
+
+  return {
+    clientSecret: null,
+    paymentIntentClientSecret,
+    setupIntentClientSecret,
+    requiresAction,
+    currency,
+    amount,
+  };
+}
+
+async function cancelIncompleteSubscriptions(customerId) {
+  const stripe = stripeClient();
+  const list = await stripe.subscriptions.list({
+    customer: customerId,
+    status: 'incomplete',
+    limit: 10,
+  });
+  await Promise.all(
+    list.data.map((sub) =>
+      stripe.subscriptions.cancel(sub.id).catch((err) => {
+        console.warn(
+          `[Stripe] Failed to cancel incomplete sub ${sub.id}:`,
+          err.message,
+        );
+      }),
+    ),
+  );
+}
+
+async function retrieveSubscription(subscriptionId) {
+  const stripe = stripeClient();
+  return stripe.subscriptions.retrieve(subscriptionId, {
+    expand: ['items.data.price', 'latest_invoice.payment_intent'],
+  });
+}
+
+async function setDefaultPaymentMethod({ customerId, paymentMethodId }) {
+  const stripe = stripeClient();
+  try {
+    await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
+  } catch (err) {
+    // Already attached to this customer is fine.
+    if (err?.code !== 'resource_already_exists') throw err;
+  }
+  await stripe.customers.update(customerId, {
+    invoice_settings: { default_payment_method: paymentMethodId },
+  });
+  // Also update active subscription default PM when present.
+  const sub = await fetchActiveSubscriptionForCustomer(customerId);
+  if (sub && (sub.status === 'active' || sub.status === 'trialing')) {
+    await stripe.subscriptions.update(sub.id, {
+      default_payment_method: paymentMethodId,
+    });
+  }
+}
+
 function mapSubscriptionToStatus(subscription) {
   const entitlementId = getEntitlementId();
   if (!subscription) {
@@ -307,6 +816,7 @@ function mapSubscriptionToStatus(subscription) {
       productIdentifier: null,
       expirationDate: null,
       willRenew: false,
+      cancelAtPeriodEnd: false,
       status: 'free',
       managementUrl: null,
       stripeCustomerId: null,
@@ -318,21 +828,26 @@ function mapSubscriptionToStatus(subscription) {
   const isOnTrial = status === 'trialing';
   const hasPremium = status === 'active' || status === 'trialing';
   const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
+  // Stripe API 2025+ moved period bounds onto subscription items.
+  const item = subscription.items?.data?.[0];
   const periodEndUnix =
     subscription.current_period_end ||
+    item?.current_period_end ||
     subscription.trial_end ||
+    subscription.cancel_at ||
     null;
   const expirationDate = periodEndUnix
     ? new Date(periodEndUnix * 1000).toISOString()
     : null;
 
   const priceId =
-    subscription.items?.data?.[0]?.price?.id ||
-    subscription.items?.data?.[0]?.plan?.id ||
+    item?.price?.id ||
+    item?.plan?.id ||
     null;
 
   let mappedStatus = 'free';
   if (isOnTrial) mappedStatus = 'trial';
+  else if (status === 'active' && cancelAtPeriodEnd) mappedStatus = 'cancelling';
   else if (status === 'active') mappedStatus = 'active';
   else if (status === 'canceled' || status === 'unpaid') {
     mappedStatus = hasPremium ? 'cancelled' : 'expired';
@@ -347,6 +862,7 @@ function mapSubscriptionToStatus(subscription) {
     productIdentifier: priceId,
     expirationDate,
     willRenew: hasPremium && !cancelAtPeriodEnd,
+    cancelAtPeriodEnd: hasPremium && cancelAtPeriodEnd,
     status: hasPremium ? mappedStatus : mappedStatus === 'free' ? 'free' : mappedStatus,
     managementUrl: null,
     stripeCustomerId:
@@ -402,8 +918,17 @@ module.exports = {
   ensureCustomer,
   createCheckoutSession,
   createBillingPortalSession,
+  getBillingDetails,
+  getInvoiceDetails,
+  cancelSubscriptionAtPeriodEnd,
+  resumeSubscription,
+  changeSubscriptionPlan,
+  createSetupPaymentMethodSession,
+  createSubscriptionPaymentSheet,
+  setDefaultPaymentMethod,
   mapSubscriptionToStatus,
   fetchActiveSubscriptionForCustomer,
+  retrieveSubscription,
   retrieveCheckoutSession,
   constructWebhookEvent,
   stripeClient,

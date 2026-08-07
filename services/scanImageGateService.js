@@ -80,7 +80,7 @@ async function classifyWithVision(imagePath, scanMode) {
     process.env.CALORIE_SCAN_GATE_MODEL ||
     process.env.CALORIE_SCAN_VISION_MODEL ||
     process.env.OPENROUTER_VISION_MODEL ||
-    'google/gemini-2.0-flash-001';
+    'google/gemma-4-26b-a4b-it:free';
 
   const prompt = `You are a careful computer-vision gate for a calorie-scan app.
 The user selected mode: "${scanMode}".

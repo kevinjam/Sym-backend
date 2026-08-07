@@ -10,6 +10,7 @@ const {
   uploadScanImages
 } = require('../controllers/aiScannerController');
 const { authenticateToken } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/requirePremium');
 
 /**
  * @swagger
@@ -118,6 +119,7 @@ const { authenticateToken } = require('../middleware/auth');
 
 // Apply authentication middleware to all routes
 router.use(authenticateToken);
+router.use(requireFeature('supplementsReview'));
 
 /**
  * Typed supplement/medication on POST /scan uses the same URL as image upload.

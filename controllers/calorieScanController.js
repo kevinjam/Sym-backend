@@ -47,6 +47,160 @@ const upload = multer({
 
 const uploadMealImage = upload.single('image');
 
+/** Map internal pipeline ids → public labels (never expose FatSecret / OpenRouter). */
+function publicDataSource(internal) {
+  switch (String(internal || '')) {
+    case 'fatsecret':
+    case 'database':
+      return 'database';
+    case 'vision_grounded':
+    case 'photo':
+      return 'photo';
+    case 'vision':
+    case 'photo_estimate':
+      return 'photo_estimate';
+    case 'menu_label':
+    case 'label':
+      return 'label';
+    case 'open_food_facts':
+    case 'barcode':
+      return 'barcode';
+    case 'nutrition_facts_ocr':
+    case 'nutrition_label':
+      return 'nutrition_label';
+    case 'rules':
+    case 'description':
+      return 'description';
+    case 'rejected':
+      return 'rejected';
+    default:
+      return 'analysis';
+  }
+}
+
+function scrubVendorCopy(text) {
+  return String(text || '')
+    .replace(/FatSecret/gi, 'our nutrition database')
+    .replace(/Open Food Facts/gi, 'our product database')
+    .replace(/OpenRouter/gi, 'AI')
+    .replace(/Analyze with (?:our nutrition database|FatSecret)/gi, 'Analyze')
+    .replace(/\bthe our /gi, 'our ')
+    .replace(/our nutrition database food database/gi, 'our food database')
+    .replace(/our database food database/gi, 'our food database')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function foodNamesFromAnalysis(data) {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const names = items
+    .map((i) => String(i?.name || '').trim())
+    .filter(Boolean);
+  if (!names.length) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+}
+
+function publicSourceMeta(dataSource, names) {
+  switch (dataSource) {
+    case 'database':
+      return {
+        sourceTitle: 'Nutrition match',
+        sourceSubtitle: names
+          ? `Matched to “${names}”`
+          : 'Matched in our nutrition database',
+      };
+    case 'photo':
+      return {
+        sourceTitle: 'Photo analysis',
+        sourceSubtitle: names
+          ? `Identified ${names} from your photo`
+          : 'Identified from your photo',
+      };
+    case 'photo_estimate':
+      return {
+        sourceTitle: 'Photo estimate',
+        sourceSubtitle: names
+          ? `Estimated nutrition for ${names}`
+          : 'Estimated from your photo',
+      };
+    case 'label':
+      return {
+        sourceTitle: 'Label reading',
+        sourceSubtitle: names
+          ? `Calories from label · ${names}`
+          : 'Calories from visible menu or label',
+      };
+    case 'barcode':
+      return {
+        sourceTitle: 'Barcode match',
+        sourceSubtitle: names ? `Found “${names}”` : 'Matched packaged product',
+      };
+    case 'nutrition_label':
+      return {
+        sourceTitle: 'Nutrition label',
+        sourceSubtitle: names
+          ? `Read from label · ${names}`
+          : 'Read from Nutrition Facts panel',
+      };
+    case 'description':
+      return {
+        sourceTitle: 'Description estimate',
+        sourceSubtitle: names
+          ? `From “${names}”`
+          : 'Based on your meal description',
+      };
+    default:
+      return {
+        sourceTitle: 'Meal analysis',
+        sourceSubtitle: names || 'Nutrition estimate',
+      };
+  }
+}
+
+function sanitizePublicAnalysis(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+  const data = { ...raw };
+  const rejected = data.scanRejected === true;
+  const names = foodNamesFromAnalysis(data);
+
+  data.dataSource = publicDataSource(data.dataSource);
+  delete data.visionModel;
+
+  // Always overwrite provenance with brand-neutral copy (covers old cached scans).
+  if (!rejected) {
+    const meta = publicSourceMeta(data.dataSource, names);
+    data.sourceTitle = meta.sourceTitle;
+    data.sourceSubtitle = meta.sourceSubtitle;
+    data.analysisUserNote = null;
+  } else if (typeof data.analysisUserNote === 'string') {
+    data.analysisUserNote = scrubVendorCopy(data.analysisUserNote);
+  }
+
+  if (Array.isArray(data.recommendations)) {
+    data.recommendations = data.recommendations
+      .map((r) => scrubVendorCopy(r))
+      .filter(Boolean);
+  }
+  if (data.insights?.flags) {
+    data.insights = {
+      ...data.insights,
+      flags: data.insights.flags.map((f) => scrubVendorCopy(f)).filter(Boolean),
+    };
+  }
+  if (Array.isArray(data.items)) {
+    data.items = data.items.map((item) => ({
+      ...item,
+      notes: scrubVendorCopy(
+        String(item.notes || '')
+          .replace(/FatSecret\s*#?\d*/gi, 'Database match'),
+      ),
+    }));
+  }
+  return data;
+}
+
 function patientObjectId(userId) {
   if (!userId) return null;
   const s = String(userId);
@@ -143,7 +297,7 @@ async function analyzeMealHandler(req, res) {
     if (tempPath) deleteFileIfExists(tempPath);
     tempPath = null;
 
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data: sanitizePublicAnalysis(data) });
   } catch (err) {
     console.error('[calorie-scan] analyzeMeal:', err);
     if (tempPath) deleteFileIfExists(tempPath);
@@ -173,7 +327,7 @@ async function listHistory(req, res) {
       .select('analysis')
       .lean();
 
-    const scans = rows.map((r) => r.analysis).filter(Boolean);
+    const scans = rows.map((r) => sanitizePublicAnalysis(r.analysis)).filter(Boolean);
     return res.json({ success: true, data: { scans, count: scans.length } });
   } catch (err) {
     console.error('[calorie-scan] listHistory:', err);
@@ -282,20 +436,71 @@ async function searchRecipes(req, res) {
  * GET /api/calorie-scan/provider-status
  */
 async function providerStatus(req, res) {
-  return res.json({
-    success: true,
-    data: {
-      fatsecretConfigured: fatsecretClient.isConfigured(),
-      region: fatsecretClient.region(),
-      language: fatsecretClient.language(),
-      imageRecognition: true,
-      pipeline: [
-        'fatsecret_image_recognition_us_en',
-        'menu_ocr_grounded',
-        'openrouter_vision_fallback',
-      ],
-    },
-  });
+  try {
+    const health = await fatsecretClient.healthCheck();
+    const visionModel =
+      process.env.CALORIE_SCAN_VISION_MODEL ||
+      process.env.OPENROUTER_VISION_MODEL ||
+      'google/gemma-4-26b-a4b-it:free';
+
+    const blockers = [];
+    if (!health.configured) {
+      blockers.push('Set FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET in backend/.env');
+    } else if (!health.tokenOk) {
+      blockers.push(health.authError || 'FatSecret OAuth token failed');
+    } else if (!health.apiReachable) {
+      if (health.apiError?.code === 'FS_INVALID_IP') {
+        blockers.push(
+          'Register this server\'s public IP in the FatSecret API dashboard (error 21 Invalid IP).',
+        );
+      } else if (health.apiError) {
+        blockers.push(health.apiError.message);
+      }
+    }
+    if (health.tokenOk && !health.hasImageRecognitionScope) {
+      blockers.push(
+        'Activate FatSecret Image Recognition add-on (or 14-day trial) — key only has: '
+          + (health.grantedScopes.join(', ') || 'none'),
+      );
+    }
+    if (!process.env.OPENROUTER_API_KEY) {
+      blockers.push('OPENROUTER_API_KEY missing — AI vision fallback disabled');
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        fatsecretConfigured: health.configured,
+        fatsecretTokenOk: health.tokenOk,
+        fatsecretApiReachable: health.apiReachable,
+        grantedScopes: health.grantedScopes,
+        hasImageRecognitionScope: health.hasImageRecognitionScope,
+        region: health.region,
+        language: health.language,
+        requestedScope: health.requestedScope,
+        openrouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
+        visionModel,
+        imageRecognitionReady:
+          health.tokenOk
+          && health.apiReachable
+          && health.hasImageRecognitionScope,
+        blockers,
+        authError: health.authError,
+        apiError: health.apiError,
+        pipeline: [
+          'fatsecret_image_recognition_us_en',
+          'menu_ocr_grounded',
+          'openrouter_vision_fallback',
+        ],
+      },
+    });
+  } catch (err) {
+    console.error('[calorie-scan] provider-status:', err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || 'Provider status failed',
+    });
+  }
 }
 
 function handleUploadErrors(fn) {
