@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/requirePremium');
 const {
   analyzeMeal,
   listHistory,
@@ -13,6 +14,8 @@ const {
   providerStatus,
 } = require('../controllers/calorieScanController');
 
+const guard = [authenticateToken, requireFeature('calorieScan')];
+
 /**
  * @swagger
  * tags:
@@ -20,10 +23,10 @@ const {
  *   description: Meal analysis powered by FatSecret (+ OCR / vision fallbacks)
  */
 
-router.get('/provider-status', authenticateToken, providerStatus);
-router.get('/autocomplete', authenticateToken, autocompleteFoods);
-router.get('/search', authenticateToken, searchFoods);
-router.get('/recipes', authenticateToken, searchRecipes);
+router.get('/provider-status', ...guard, providerStatus);
+router.get('/autocomplete', ...guard, autocompleteFoods);
+router.get('/search', ...guard, searchFoods);
+router.get('/recipes', ...guard, searchRecipes);
 
 /**
  * @swagger
@@ -34,9 +37,9 @@ router.get('/recipes', authenticateToken, searchRecipes);
  *     security:
  *       - bearerAuth: []
  */
-router.post('/analyze', authenticateToken, analyzeMeal);
+router.post('/analyze', ...guard, analyzeMeal);
 
-router.get('/history', authenticateToken, listHistory);
-router.delete('/:scanId', authenticateToken, deleteScan);
+router.get('/history', ...guard, listHistory);
+router.delete('/:scanId', ...guard, deleteScan);
 
 module.exports = router;

@@ -432,6 +432,20 @@ async function recognizeImage(imagePath) {
       console.info('[fatsecret] image looks like a nutrition label only — skip IR');
       return null;
     }
+    if (err.code === 'FS_INVALID_IP') {
+      console.error(
+        '[fatsecret] image recognition blocked: server IP is not allowlisted. '
+          + 'Add this machine\'s public IP in the FatSecret API dashboard → Manage Keys.',
+      );
+      return null;
+    }
+    if (err.code === 'FS_MISSING_SCOPE') {
+      console.error(
+        '[fatsecret] image recognition needs the image-recognition add-on. '
+          + 'Activate the 14-day trial (or paid add-on) in the FatSecret API dashboard.',
+      );
+      return null;
+    }
     console.warn('[fatsecret] image recognition:', err.message);
     return null;
   }

@@ -56,6 +56,7 @@ function formatStatus(doc, { forcePremium = false } = {}) {
       productIdentifier: 'sym_force_premium',
       expirationDate: null,
       willRenew: false,
+      cancelAtPeriodEnd: false,
       status: 'active',
       managementUrl: null,
       lastSyncedAt: new Date().toISOString(),
@@ -70,19 +71,22 @@ function formatStatus(doc, { forcePremium = false } = {}) {
       productIdentifier: null,
       expirationDate: null,
       willRenew: false,
+      cancelAtPeriodEnd: false,
       status: 'free',
       managementUrl: null,
       lastSyncedAt: null,
     };
   }
 
+  const willRenew = Boolean(doc.willRenew);
   return {
     hasPremium: doc.hasPremium,
     isOnTrial: doc.isOnTrial,
     entitlementId: doc.entitlementId,
     productIdentifier: doc.productIdentifier,
     expirationDate: doc.expirationDate ? doc.expirationDate.toISOString() : null,
-    willRenew: doc.willRenew,
+    willRenew,
+    cancelAtPeriodEnd: Boolean(doc.hasPremium && !willRenew),
     status: doc.status,
     managementUrl: doc.managementUrl,
     lastSyncedAt: doc.lastSyncedAt ? doc.lastSyncedAt.toISOString() : null,
@@ -161,6 +165,36 @@ async function syncFromCheckoutSession(userId, sessionId) {
   const mapped = stripeService.mapSubscriptionToStatus(subscription);
   if (customerId) mapped.stripeCustomerId = customerId;
   return upsertFromMapped(userId, mapped, { session, subscription });
+}
+
+async function syncFromSubscriptionId(userId, subscriptionId) {
+  const subscription = await stripeService.retrieveSubscription(subscriptionId);
+  const metaUser = subscription.metadata?.symUserId || null;
+  if (metaUser && String(metaUser) !== String(userId)) {
+    const err = new Error('Subscription does not belong to this user.');
+    err.code = 'SESSION_USER_MISMATCH';
+    throw err;
+  }
+
+  const existing = await UserSubscription.findOne(subscriptionLookupFilter(userId));
+  const customerId =
+    typeof subscription.customer === 'string'
+      ? subscription.customer
+      : subscription.customer?.id;
+
+  if (
+    existing?.stripeCustomerId &&
+    customerId &&
+    String(existing.stripeCustomerId) !== String(customerId)
+  ) {
+    const err = new Error('Subscription customer does not match this account.');
+    err.code = 'SESSION_USER_MISMATCH';
+    throw err;
+  }
+
+  const mapped = stripeService.mapSubscriptionToStatus(subscription);
+  if (customerId) mapped.stripeCustomerId = customerId;
+  return upsertFromMapped(userId, mapped, subscription);
 }
 
 /**
@@ -257,7 +291,7 @@ async function getStoreConfig(req, res) {
 /**
  * POST /api/subscription/checkout
  * Body: { planId }
- * Returns: { url, sessionId } for Stripe hosted Checkout (Apple Pay, cards, Link…).
+ * Legacy hosted Checkout — prefer POST /payment-sheet for in-app purchases.
  */
 async function createCheckout(req, res) {
   try {
@@ -324,8 +358,77 @@ async function createCheckout(req, res) {
 }
 
 /**
+ * POST /api/subscription/payment-sheet
+ * Body: { planId }
+ * Returns PaymentSheet secrets for native in-app subscription checkout.
+ */
+async function createPaymentSheet(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    const planId = String(req.body?.planId || '').trim();
+
+    if (!planId) {
+      return res.status(400).json({ success: false, error: 'planId is required.' });
+    }
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+
+    const user = await User.findById(userId).select('email firstName lastName');
+    const existing = await UserSubscription.findOne(subscriptionLookupFilter(userId));
+    const email = user?.email || req.user.email || undefined;
+    const name =
+      [user?.firstName, user?.lastName].filter(Boolean).join(' ') || undefined;
+
+    const sheet = await stripeService.createSubscriptionPaymentSheet({
+      userId,
+      email,
+      name,
+      planId,
+      existingCustomerId: existing?.stripeCustomerId || null,
+    });
+
+    if (sheet.customerId) {
+      await UserSubscription.findOneAndUpdate(
+        subscriptionLookupFilter(userId),
+        {
+          appUserId: String(userId),
+          revenueCatAppUserId: String(userId),
+          userId: toObjectId(userId),
+          stripeCustomerId: sheet.customerId,
+          stripeSubscriptionId: sheet.subscriptionId,
+          lastSyncedAt: new Date(),
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+    }
+
+    return res.json({
+      success: true,
+      data: sheet,
+    });
+  } catch (error) {
+    console.error('[Subscription] payment-sheet error:', error);
+    const status =
+      error.code === 'UNKNOWN_PLAN' ||
+      error.code === 'PRICE_NOT_CONFIGURED' ||
+      error.code === 'ALREADY_SUBSCRIBED' ||
+      error.code === 'MISSING_CLIENT_SECRET'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message || 'Unable to prepare in-app checkout.',
+    });
+  }
+}
+
+/**
  * POST /api/subscription/portal
- * Opens Stripe Customer Portal (manage / cancel).
+ * @deprecated Prefer in-app Manage Billing APIs.
  */
 async function createPortal(req, res) {
   try {
@@ -360,10 +463,348 @@ async function createPortal(req, res) {
   }
 }
 
+function requireStripeCustomerDoc(userId) {
+  return UserSubscription.findOne(subscriptionLookupFilter(userId));
+}
+
+/**
+ * GET /api/subscription/billing
+ * In-app Manage Billing snapshot (no Customer Portal).
+ */
+async function getBilling(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.json({
+        success: true,
+        data: {
+          hasPremium: false,
+          status: 'free',
+          planTitle: null,
+          invoices: [],
+          paymentMethod: null,
+        },
+      });
+    }
+
+    const details = await stripeService.getBillingDetails(doc.stripeCustomerId);
+    // Keep local entitlement cache in sync (mapped fields only).
+    await upsertFromMapped(
+      userId,
+      {
+        hasPremium: details.hasPremium,
+        isOnTrial: details.isOnTrial,
+        entitlementId: details.entitlementId,
+        productIdentifier: details.productIdentifier,
+        expirationDate: details.expirationDate,
+        willRenew: details.willRenew,
+        status: details.status,
+        managementUrl: details.managementUrl,
+        stripeCustomerId: details.stripeCustomerId || doc.stripeCustomerId,
+        stripeSubscriptionId: details.stripeSubscriptionId,
+      },
+      null,
+    );
+
+    return res.json({ success: true, data: details });
+  } catch (error) {
+    console.error('[Subscription] getBilling error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to load billing details.',
+    });
+  }
+}
+
+/**
+ * GET /api/subscription/billing/invoices/:invoiceId
+ * In-app invoice detail (no invoice.stripe.com redirect).
+ */
+async function getInvoice(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    const invoiceId = String(req.params.invoiceId || '').trim();
+    if (!invoiceId) {
+      return res.status(400).json({ success: false, error: 'invoiceId is required.' });
+    }
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.status(404).json({
+        success: false,
+        error: 'No billing account on file.',
+      });
+    }
+
+    const invoice = await stripeService.getInvoiceDetails(
+      doc.stripeCustomerId,
+      invoiceId,
+    );
+    return res.json({ success: true, data: invoice });
+  } catch (error) {
+    console.error('[Subscription] getInvoice error:', error);
+    const status = error.code === 'INVOICE_FORBIDDEN' ? 403 : 500;
+    return res.status(status).json({
+      success: false,
+      error:
+        error.code === 'INVOICE_FORBIDDEN'
+          ? 'Invoice not found.'
+          : 'Unable to load invoice.',
+    });
+  }
+}
+
+/**
+ * POST /api/subscription/cancel
+ * Cancels at period end (keeps access until then).
+ */
+async function cancelSubscription(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active subscription to cancel.',
+      });
+    }
+
+    const sub = await stripeService.fetchActiveSubscriptionForCustomer(
+      doc.stripeCustomerId,
+    );
+    if (!sub || (sub.status !== 'active' && sub.status !== 'trialing')) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active subscription to cancel.',
+      });
+    }
+
+    const updated = await stripeService.cancelSubscriptionAtPeriodEnd(sub.id);
+    const mapped = stripeService.mapSubscriptionToStatus(updated);
+    await upsertFromMapped(userId, mapped, updated);
+    const details = await stripeService.getBillingDetails(doc.stripeCustomerId);
+
+    return res.json({
+      success: true,
+      data: details,
+      message: 'Subscription will end at the close of the current period.',
+    });
+  } catch (error) {
+    console.error('[Subscription] cancel error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to cancel subscription.',
+    });
+  }
+}
+
+/**
+ * POST /api/subscription/resume
+ * Undoes a scheduled cancellation.
+ */
+async function resumeSubscription(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No subscription on file.',
+      });
+    }
+
+    const sub = await stripeService.fetchActiveSubscriptionForCustomer(
+      doc.stripeCustomerId,
+    );
+    if (!sub) {
+      return res.status(400).json({
+        success: false,
+        error: 'No subscription to resume.',
+      });
+    }
+
+    const updated = await stripeService.resumeSubscription(sub.id);
+    const mapped = stripeService.mapSubscriptionToStatus(updated);
+    await upsertFromMapped(userId, mapped, updated);
+    const details = await stripeService.getBillingDetails(doc.stripeCustomerId);
+
+    return res.json({
+      success: true,
+      data: details,
+      message: 'Auto-renewal restored.',
+    });
+  } catch (error) {
+    console.error('[Subscription] resume error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to resume subscription.',
+    });
+  }
+}
+
+/**
+ * POST /api/subscription/change-plan
+ * Body: { planId }
+ */
+async function changePlan(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    const planId = String(req.body?.planId || '').trim();
+    if (!planId) {
+      return res.status(400).json({ success: false, error: 'planId is required.' });
+    }
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Subscribe first, then change plans.',
+      });
+    }
+
+    const sub = await stripeService.fetchActiveSubscriptionForCustomer(
+      doc.stripeCustomerId,
+    );
+    if (!sub || (sub.status !== 'active' && sub.status !== 'trialing')) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active subscription to change.',
+      });
+    }
+
+    const updated = await stripeService.changeSubscriptionPlan(sub.id, planId);
+    const mapped = stripeService.mapSubscriptionToStatus(updated);
+    await upsertFromMapped(userId, mapped, updated);
+    const details = await stripeService.getBillingDetails(doc.stripeCustomerId);
+
+    return res.json({
+      success: true,
+      data: details,
+      message: 'Plan updated.',
+    });
+  } catch (error) {
+    console.error('[Subscription] changePlan error:', error);
+    const status =
+      error.code === 'UNKNOWN_PLAN' || error.code === 'PRICE_NOT_CONFIGURED'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message || 'Unable to change plan.',
+    });
+  }
+}
+
+/**
+ * POST /api/subscription/setup-payment-method
+ * Returns PaymentSheet secrets for in-app card update.
+ */
+async function setupPaymentMethod(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Stripe is not configured on the server yet.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No Stripe customer on file. Subscribe first.',
+      });
+    }
+
+    const session = await stripeService.createSetupPaymentMethodSession({
+      customerId: doc.stripeCustomerId,
+    });
+
+    return res.json({ success: true, data: session });
+  } catch (error) {
+    console.error('[Subscription] setupPaymentMethod error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to start payment method update.',
+    });
+  }
+}
+
+/**
+ * POST /api/subscription/set-default-payment-method
+ * Body: { paymentMethodId }
+ */
+async function setDefaultPaymentMethod(req, res) {
+  try {
+    const userId = req.user.id || req.user._id;
+    const paymentMethodId = String(req.body?.paymentMethodId || '').trim();
+    if (!paymentMethodId) {
+      return res.status(400).json({
+        success: false,
+        error: 'paymentMethodId is required.',
+      });
+    }
+    const doc = await requireStripeCustomerDoc(userId);
+    if (!doc?.stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No Stripe customer on file.',
+      });
+    }
+
+    await stripeService.setDefaultPaymentMethod({
+      customerId: doc.stripeCustomerId,
+      paymentMethodId,
+    });
+    const details = await stripeService.getBillingDetails(doc.stripeCustomerId);
+
+    return res.json({
+      success: true,
+      data: details,
+      message: 'Payment method updated.',
+    });
+  } catch (error) {
+    console.error('[Subscription] setDefaultPaymentMethod error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to save payment method.',
+    });
+  }
+}
+
 /**
  * POST /api/subscription/sync
- * Body (optional): { sessionId }
- * Confirms Checkout completion and refreshes entitlement from Stripe.
+ * Body (optional): { sessionId } | { subscriptionId }
+ * Confirms Checkout / PaymentSheet completion and refreshes entitlement.
  */
 async function syncSubscription(req, res) {
   try {
@@ -385,8 +826,18 @@ async function syncSubscription(req, res) {
     }
 
     const sessionId = String(req.body?.sessionId || '').trim();
+    const subscriptionId = String(req.body?.subscriptionId || '').trim();
     let doc;
-    if (sessionId) {
+    if (subscriptionId) {
+      doc = await syncFromSubscriptionId(userId, subscriptionId);
+      // PaymentSheet can finish before Stripe flips status — brief retry.
+      if (!doc?.hasPremium) {
+        for (let i = 0; i < 3 && !doc?.hasPremium; i += 1) {
+          await new Promise((r) => setTimeout(r, 600));
+          doc = await syncFromSubscriptionId(userId, subscriptionId);
+        }
+      }
+    } else if (sessionId) {
       doc = await syncFromCheckoutSession(userId, sessionId);
     } else {
       const existing = await UserSubscription.findOne(subscriptionLookupFilter(userId));
@@ -554,7 +1005,15 @@ module.exports = {
   getPlans,
   getStoreConfig,
   createCheckout,
+  createPaymentSheet,
   createPortal,
+  getBilling,
+  getInvoice,
+  cancelSubscription,
+  resumeSubscription,
+  changePlan,
+  setupPaymentMethod,
+  setDefaultPaymentMethod,
   syncSubscription,
   restoreSubscription,
   handleWebhook,

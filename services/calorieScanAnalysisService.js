@@ -5,6 +5,7 @@ const axios = require('axios');
 const { randomUUID } = require('crypto');
 const openFoodFacts = require('./openFoodFactsService');
 const fatsecretFood = require('./fatsecretFoodService');
+const fatsecretClient = require('./fatsecretClient');
 const { ocrImage, parseNutritionFactsLabel, extractMenuCalorieCallout } = require('./nutritionOcrService');
 const { gateScanImage } = require('./scanImageGateService');
 
@@ -81,6 +82,113 @@ function inferItems(text, seed) {
   return items;
 }
 
+function foodNamesLabel(items, fallback = 'Meal') {
+  const names = (items || [])
+    .map((i) => String(i.name || '').trim())
+    .filter(Boolean);
+  if (!names.length) return fallback;
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+}
+
+/** Deterministic 0–100 score from measured macros — no random seed. */
+function computeHealthScore(macros, itemNames = '') {
+  const protein = Number(macros.proteinG) || 0;
+  const carbs = Number(macros.carbsG) || 0;
+  const fat = Number(macros.fatG) || 0;
+  const fiber = Number(macros.fiberG) || 0;
+  const sugar = Number(macros.sugarG) || 0;
+  const sodium = Number(macros.sodiumMg) || 0;
+  const calories = protein * 4 + carbs * 4 + fat * 9;
+  const names = String(itemNames).toLowerCase();
+
+  let score = 62;
+  if (calories > 0) {
+    const protPer100 = (protein / calories) * 100;
+    if (protPer100 >= 8) score += 12;
+    else if (protPer100 >= 5) score += 7;
+    else if (protPer100 < 2.5) score -= 8;
+  }
+  if (fiber >= 8) score += 10;
+  else if (fiber >= 5) score += 5;
+  else if (fiber > 0 && fiber < 3) score -= 4;
+  if (sugar > 35) score -= 14;
+  else if (sugar > 22) score -= 8;
+  if (sodium > 1500) score -= 12;
+  else if (sodium > 1000) score -= 6;
+  if (/fries|fried|soda|candy|donut|doughnut|milkshake/.test(names)) score -= 10;
+  if (/salad|vegetables|broccoli|spinach|grilled|steamed/.test(names)) score += 8;
+  if (calories > 0) {
+    const fatShare = (fat * 9) / calories;
+    if (fatShare > 0.55) score -= 6;
+  }
+  return Math.max(5, Math.min(98, Math.round(score)));
+}
+
+function buildSourceMeta(dataSource, items, extras = {}) {
+  const names = foodNamesLabel(items, '');
+  // User-facing copy only — never expose vendor/model names (FatSecret, OpenRouter, etc.).
+  switch (dataSource) {
+    case 'fatsecret':
+      return {
+        sourceTitle: 'Nutrition match',
+        sourceSubtitle: names
+          ? `Matched to “${names}”`
+          : 'Matched in our nutrition database',
+        analysisUserNote: null,
+      };
+    case 'vision_grounded':
+      return {
+        sourceTitle: 'Photo analysis',
+        sourceSubtitle: names
+          ? `Identified ${names} from your photo`
+          : 'Identified from your photo',
+        analysisUserNote: null,
+      };
+    case 'vision':
+      return {
+        sourceTitle: 'Photo estimate',
+        sourceSubtitle: names
+          ? `Estimated nutrition for ${names}`
+          : 'Estimated from your photo',
+        analysisUserNote: null,
+      };
+    case 'menu_label':
+      return {
+        sourceTitle: 'Label reading',
+        sourceSubtitle: names
+          ? `Calories from label · ${names}`
+          : 'Calories from visible menu or label',
+        analysisUserNote: null,
+      };
+    case 'open_food_facts':
+      return {
+        sourceTitle: 'Barcode match',
+        sourceSubtitle: names ? `Found “${names}”` : 'Matched packaged product',
+        analysisUserNote: null,
+      };
+    case 'nutrition_facts_ocr':
+      return {
+        sourceTitle: 'Nutrition label',
+        sourceSubtitle: names ? `Read from label · ${names}` : 'Read from Nutrition Facts panel',
+        analysisUserNote: null,
+      };
+    case 'rules':
+      return {
+        sourceTitle: 'Description estimate',
+        sourceSubtitle: names ? `From “${names}”` : 'Based on your meal description',
+        analysisUserNote: null,
+      };
+    default:
+      return {
+        sourceTitle: 'Meal analysis',
+        sourceSubtitle: names || 'Nutrition estimate',
+        analysisUserNote: null,
+      };
+  }
+}
+
 function finalizeFromItems({
   items,
   mealType,
@@ -90,86 +198,94 @@ function finalizeFromItems({
   dataSource,
   classificationOverride,
   macrosOverride,
+  visionModel,
+  analysisUserNoteOverride,
 }) {
-  let totalCal = items.reduce((a, b) => a + (b.calories || 0), 0);
-  if (totalCal < 40) totalCal = 120 + (seed % 80);
+  const safeItems = Array.isArray(items) ? items : [];
+  const totalCal = Math.round(
+    safeItems.reduce((a, b) => a + (Number(b.calories) || 0), 0),
+  );
 
   let p = 0;
   let c = 0;
   let f = 0;
-  for (const i of items) {
+  for (const i of safeItems) {
     p += Number(i.proteinG) || 0;
     c += Number(i.carbsG) || 0;
     f += Number(i.fatG) || 0;
   }
 
-  const hasDbMacros = Boolean(macrosOverride);
   const macros = macrosOverride || {
-    proteinG: Math.min(80, Math.max(0, Math.round(p * 10) / 10)),
-    carbsG: Math.min(120, Math.max(0, Math.round(c * 10) / 10)),
-    fatG: Math.min(60, Math.max(0, Math.round(f * 10) / 10)),
-    // Don't invent large fiber/sugar/sodium — that caused irrelevant "low sodium sauce" tips.
-    fiberG: Math.min(40, Math.max(0, Math.round((items.reduce((a, i) => a + (Number(i.fiberG) || 0), 0)) * 10) / 10)),
-    sugarG: Math.min(48, Math.max(0, Math.round((items.reduce((a, i) => a + (Number(i.sugarG) || 0), 0)) * 10) / 10)),
-    sodiumMg: Math.max(0, Math.round(items.reduce((a, i) => a + (Number(i.sodiumMg) || 0), 0))),
+    proteinG: Math.round(p * 10) / 10,
+    carbsG: Math.round(c * 10) / 10,
+    fatG: Math.round(f * 10) / 10,
+    fiberG:
+      Math.round(
+        safeItems.reduce((a, i) => a + (Number(i.fiberG) || 0), 0) * 10,
+      ) / 10,
+    sugarG:
+      Math.round(
+        safeItems.reduce((a, i) => a + (Number(i.sugarG) || 0), 0) * 10,
+      ) / 10,
+    sodiumMg: Math.round(
+      safeItems.reduce((a, i) => a + (Number(i.sodiumMg) || 0), 0),
+    ),
   };
 
+  const dailyTargets = {
+    calories: Number(process.env.CALORIE_SCAN_DAILY_KCAL) || 2000,
+    protein: Number(process.env.CALORIE_SCAN_DAILY_PROTEIN_G) || 90,
+    carbs: Number(process.env.CALORIE_SCAN_DAILY_CARBS_G) || 275,
+    fat: Number(process.env.CALORIE_SCAN_DAILY_FAT_G) || 65,
+    fiber: Number(process.env.CALORIE_SCAN_DAILY_FIBER_G) || 28,
+    sugar: Number(process.env.CALORIE_SCAN_DAILY_SUGAR_G) || 50,
+  };
   const dailyPercent = {
-    protein: Math.min(120, Math.round((macros.proteinG / 90) * 100)),
-    carbs: Math.min(120, Math.round((macros.carbsG / 275) * 100)),
-    fat: Math.min(120, Math.round((macros.fatG / 65) * 100)),
-    fiber: Math.min(120, Math.round((macros.fiberG / 28) * 100)),
-    sugar: Math.min(120, Math.round((macros.sugarG / 50) * 100)),
+    calories: Math.min(200, Math.round((totalCal / dailyTargets.calories) * 100)),
+    protein: Math.min(200, Math.round((macros.proteinG / dailyTargets.protein) * 100)),
+    carbs: Math.min(200, Math.round((macros.carbsG / dailyTargets.carbs) * 100)),
+    fat: Math.min(200, Math.round((macros.fatG / dailyTargets.fat) * 100)),
+    fiber: Math.min(200, Math.round((macros.fiberG / dailyTargets.fiber) * 100)),
+    sugar: Math.min(200, Math.round((macros.sugarG / dailyTargets.sugar) * 100)),
   };
 
-  let score = 72;
-  const tl = (description || '').toLowerCase();
-  const itemNames = items.map((i) => String(i.name || '').toLowerCase()).join(' ');
-  const bakery =
-    /croissant|pastry|bagel|muffin|donut|doughnut|bread|bun|scone|cookie|cake/.test(
-      `${tl} ${itemNames}`,
-    );
-  if (tl.includes('soda') || tl.includes('fries')) score -= 14;
-  if (tl.includes('salad')) score += 8;
-  if (macros.sugarG > 28) score -= 10;
-  if (macros.fiberG > 0 && macros.fiberG < 5) score -= 4;
-  if (macros.sodiumMg > 1200) score -= 8;
-  if (macros.proteinG > 24) score += 6;
-  score += (seed % 9) - 4;
-  score = Math.max(38, Math.min(96, score));
+  const itemNames = safeItems.map((i) => String(i.name || '')).join(' ');
+  const score = computeHealthScore(macros, `${description || ''} ${itemNames}`);
+  const classification =
+    classificationOverride || foodNamesLabel(safeItems, 'Meal');
 
-  let classification = classificationOverride || 'Balanced';
-  if (!classificationOverride) {
-    if (macros.sugarG > 30 || tl.includes('soda')) classification = 'High sugar';
-    else if (macros.proteinG > 32) classification = 'High protein';
-    else if (bakery) classification = 'Bakery / pastry';
-    else if (macros.fiberG > 0 && macros.fiberG < 5) classification = 'Low fiber';
-    else if (macros.sodiumMg > 1100) classification = 'High sodium';
-  }
+  const sourceMeta = buildSourceMeta(dataSource || 'rules', safeItems, {
+    visionModel,
+  });
 
   const recommendations = [];
   if (dataSource === 'fatsecret') {
     recommendations.push(
-      'Nutrition from the FatSecret food database — verify serving size matches what you ate.',
+      'Nutrition from our food database — verify serving size matches what you ate.',
+    );
+  } else if (dataSource === 'vision_grounded') {
+    recommendations.push(
+      'Food identified from your photo, then matched to average nutrition in our database.',
     );
   } else if (dataSource === 'open_food_facts') {
     recommendations.push(
-      'Values come from the Open Food Facts package database for this barcode — check the label serving size if yours differs.',
+      'Values come from a packaged-food database for this barcode — check the label serving size if yours differs.',
     );
   } else if (dataSource === 'nutrition_facts_ocr') {
     recommendations.push(
       'Macros were read from the Nutrition Facts label. Confirm serving size matches what you ate.',
     );
-  } else if (dataSource === 'vision_grounded') {
-    recommendations.push(
-      'Food identified from your photo, then matched to average nutrition in the FatSecret database.',
-    );
   } else if (dataSource === 'menu_label') {
     recommendations.push(
-      'Calories taken from the visible menu/price tag when available, with macros from the food database.',
+      'Calories taken from the visible menu/price tag when available, with macros from our food database.',
     );
   }
-  if (classification === 'High sugar') {
+
+  const bakery =
+    /croissant|pastry|bagel|muffin|donut|doughnut|bread|bun|scone|cookie|cake/i.test(
+      itemNames,
+    );
+  if (macros.sugarG > 30) {
     recommendations.push(
       'Swapping a sugary drink for water or unsweetened tea keeps energy steadier through the afternoon.',
     );
@@ -179,7 +295,9 @@ function finalizeFromItems({
       'Pastries are calorie-dense — pairing with protein (eggs, yogurt) or fruit can make the meal more filling.',
     );
   } else if (macros.fiberG > 0 && macros.fiberG < 7 && !bakery) {
-    recommendations.push('A side of greens or berries would lift fiber and help you feel full longer.');
+    recommendations.push(
+      'A side of greens or berries would lift fiber and help you feel full longer.',
+    );
   }
   if (macros.proteinG < 22 && (dataSource === 'rules' || bakery)) {
     recommendations.push(
@@ -188,11 +306,9 @@ function finalizeFromItems({
         : 'Try adding lean protein — fish, tofu, beans, or Greek yogurt — to anchor this meal.',
     );
   }
-  // Only tip about sodium when we actually measured it from a DB/label.
   if (
     macros.sodiumMg > 1000 &&
-    (hasDbMacros ||
-      dataSource === 'fatsecret' ||
+    (dataSource === 'fatsecret' ||
       dataSource === 'open_food_facts' ||
       dataSource === 'nutrition_facts_ocr' ||
       dataSource === 'vision_grounded' ||
@@ -204,7 +320,9 @@ function finalizeFromItems({
   }
   const g = (healthGoal || '').toLowerCase();
   if (g.includes('muscle')) {
-    recommendations.push('For muscle gain, add ~20 g more protein (extra egg, cottage cheese, or lentils).');
+    recommendations.push(
+      'For muscle gain, add ~20 g more protein (extra egg, cottage cheese, or lentils).',
+    );
   }
   if (g.includes('weight') || g.includes('loss')) {
     recommendations.push(
@@ -214,26 +332,40 @@ function finalizeFromItems({
     );
   }
   if (recommendations.length === 0) {
-    recommendations.push('Solid balance — keep rotating proteins and plants for micronutrient variety.');
+    recommendations.push(
+      'Solid balance — keep rotating proteins and plants for micronutrient variety.',
+    );
   }
 
+  const proteinDensity =
+    totalCal > 0 ? Math.round(((macros.proteinG * 4) / totalCal) * 100) : 0;
   const insights = {
-    glycemicLoad: macros.sugarG > 28 ? 'higher' : macros.sugarG < 14 ? 'lower' : 'moderate',
-    fullnessScore: Math.min(95, 60 + (seed % 35)),
+    glycemicLoad:
+      macros.sugarG > 28 ? 'higher' : macros.sugarG < 14 ? 'lower' : 'moderate',
+    fullnessScore: Math.min(
+      95,
+      Math.max(20, Math.round(40 + macros.proteinG * 0.9 + macros.fiberG * 2.2)),
+    ),
     energyImpact: macros.sugarG > 26 ? 'quick rise' : 'steady',
-    hydrationNote:
-      tl.includes('soda') || tl.includes('juice')
-        ? 'Sugary drinks hydrate less effectively than water — add a glass of water with this meal.'
-        : 'Pair this meal with water to support digestion and steady energy.',
+    hydrationNote: /soda|juice|soft drink/i.test(`${description || ''} ${itemNames}`)
+      ? 'Sugary drinks hydrate less effectively than water — add a glass of water with this meal.'
+      : 'Pair this meal with water to support digestion and steady energy.',
     vitaminHighlights: [
-      macros.proteinG > 24 ? 'Good protein for satiety and repair.' : 'Room to grow on lean protein.',
-      macros.fiberG >= 7 ? 'Fiber supports gut rhythm and fullness.' : 'Fiber could be boosted with plants.',
-    ],
+      macros.proteinG > 24
+        ? 'Good protein for satiety and repair.'
+        : 'Room to grow on lean protein.',
+      macros.fiberG >= 7
+        ? 'Fiber supports gut rhythm and fullness.'
+        : 'Fiber could be boosted with plants.',
+      proteinDensity >= 20
+        ? `About ${proteinDensity}% of calories from protein.`
+        : null,
+    ].filter(Boolean),
     flags: [
       macros.sodiumMg > 1000 ? 'Sodium is elevated for a single meal.' : null,
       macros.sugarG > 26 ? 'Sugar may contribute to a later energy dip.' : null,
-      dataSource === 'fatsecret' ? 'Matched in FatSecret nutrition database.' : null,
-      dataSource === 'open_food_facts' ? 'Matched to packaged food database.' : null,
+      dataSource === 'fatsecret' ? 'Matched in our nutrition database.' : null,
+      dataSource === 'open_food_facts' ? 'Matched to a packaged food database.' : null,
       dataSource === 'nutrition_facts_ocr' ? 'Read from Nutrition Facts label.' : null,
       macros.fiberG >= 8 ? 'Nice fiber contribution.' : null,
     ].filter(Boolean),
@@ -243,19 +375,25 @@ function finalizeFromItems({
     scanId: randomUUID(),
     scannedAt: new Date().toISOString(),
     mealType: mealType || 'lunch',
-    totalCalories: Math.round(totalCal),
+    totalCalories: totalCal,
     healthScore: score,
     mealClassification: classification,
     macros,
     dailyPercent,
-    items,
+    dailyTargets,
+    items: safeItems,
     recommendations: recommendations.slice(0, 6),
     insights,
     usedOfflineFallback: false,
     healthGoalUsed: healthGoal ? String(healthGoal).trim() || null : null,
     dataSource: dataSource || 'rules',
+    sourceTitle: sourceMeta.sourceTitle,
+    sourceSubtitle: sourceMeta.sourceSubtitle,
+    // Keep model id server-side only — do not send to clients.
+    visionModel: null,
     scanRejected: false,
-    analysisUserNote: null,
+    analysisUserNote:
+      analysisUserNoteOverride || sourceMeta.analysisUserNote || null,
     detectedScene: null,
   };
 }
@@ -293,6 +431,7 @@ function buildRejectedAnalysis({
       sodiumMg: 0,
     },
     dailyPercent: {
+      calories: 0,
       protein: 0,
       carbs: 0,
       fat: 0,
@@ -349,9 +488,9 @@ function productToAnalysis(product, { mealType, healthGoal, description, seed })
       carbsG: product.carbsG,
       fatG: product.fatG,
       notes: product.barcode
-        ? `Barcode ${product.barcode}${product.foodId ? ` · FatSecret #${product.foodId}` : ''}`
+        ? `Barcode ${product.barcode}`
         : product.foodId
-          ? `FatSecret food #${product.foodId}`
+          ? 'Database match'
           : source,
     },
   ];
@@ -362,14 +501,18 @@ function productToAnalysis(product, { mealType, healthGoal, description, seed })
     description: description || product.name,
     seed,
     dataSource,
-    classificationOverride:
+    classificationOverride: foodNamesLabel(
+      [
+        {
+          name: product.name,
+        },
+      ],
       source === 'open_food_facts'
         ? 'Packaged food'
         : source === 'menu_label'
           ? 'Menu / label'
-          : product.recognitionMethod === 'image_recognition_v2'
-            ? 'FatSecret image match'
-            : 'FatSecret match',
+          : 'Meal',
+    ),
     macrosOverride: {
       proteinG: product.proteinG,
       carbsG: product.carbsG,
@@ -400,7 +543,7 @@ function productsToAnalysis(products, { mealType, healthGoal, description, seed 
     proteinG: p.proteinG,
     carbsG: p.carbsG,
     fatG: p.fatG,
-    notes: p.foodId ? `FatSecret #${p.foodId}` : 'FatSecret image recognition',
+    notes: p.foodId ? 'Database match' : 'Photo match',
   }));
 
   const macrosOverride = {
@@ -419,7 +562,7 @@ function productsToAnalysis(products, { mealType, healthGoal, description, seed 
     description,
     seed,
     dataSource: 'fatsecret',
-    classificationOverride: 'Plate (FatSecret)',
+    classificationOverride: foodNamesLabel(items, 'Meal'),
     macrosOverride,
   });
 }
@@ -444,7 +587,7 @@ function labelToAnalysis(label, { mealType, healthGoal, description, seed }) {
     description: description || 'Nutrition Facts',
     seed,
     dataSource: 'nutrition_facts_ocr',
-    classificationOverride: 'From label',
+    classificationOverride: foodNamesLabel(items, 'From label'),
     macrosOverride: {
       proteinG: label.proteinG,
       carbsG: label.carbsG,
@@ -456,6 +599,25 @@ function labelToAnalysis(label, { mealType, healthGoal, description, seed }) {
   });
 }
 
+function visionModelCandidates() {
+  // Free multimodal models (Google Gemma 4 family ≈ Gemini-class vision, $0 on OpenRouter).
+  const preferred =
+    process.env.CALORIE_SCAN_VISION_MODEL ||
+    process.env.OPENROUTER_VISION_MODEL ||
+    'google/gemma-4-26b-a4b-it:free';
+  const freeFallbacks = [
+    'google/gemma-4-26b-a4b-it:free',
+    'google/gemma-4-31b-it:free',
+    'nvidia/nemotron-nano-12b-v2-vl:free',
+  ];
+  const paidFallback =
+    String(process.env.CALORIE_SCAN_ALLOW_PAID_VISION || '').toLowerCase() ===
+    'true'
+      ? ['openai/gpt-4o-mini']
+      : [];
+  return [...new Set([preferred, ...freeFallbacks, ...paidFallback])];
+}
+
 async function analyzePlateWithVision(imagePath, description, healthGoal) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey || !imagePath || !fs.existsSync(imagePath)) return null;
@@ -463,10 +625,6 @@ async function analyzePlateWithVision(imagePath, description, healthGoal) {
   const buf = fs.readFileSync(imagePath);
   const b64 = buf.toString('base64');
   const mime = imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-  const model =
-    process.env.CALORIE_SCAN_VISION_MODEL ||
-    process.env.OPENROUTER_VISION_MODEL ||
-    'google/gemini-2.0-flash-001';
 
   const prompt = `You are a nutrition estimator for SymWellness. Analyze the meal photo.
 If the image is NOT edible food (hand, face, furniture, empty table, device, pet, scenery), return ONLY:
@@ -475,85 +633,123 @@ Otherwise return ONLY valid JSON:
 {"totalCalories":number,"healthScore":0-100,"mealClassification":string,"items":[{"name":string,"category":string,"servingEstimate":string,"calories":number,"proteinG":number,"carbsG":number,"fatG":number}],"macros":{"proteinG":number,"carbsG":number,"fatG":number,"fiberG":number,"sugarG":number,"sodiumMg":number},"recommendations":[string]}
 Use US food Calories (C). Be realistic about portions. User note: ${description || 'none'}. Health goal: ${healthGoal || 'general wellness'}.`;
 
-  try {
-    const res = await axios.post(
-      process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model,
-        temperature: 0.2,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              {
-                type: 'image_url',
-                image_url: { url: `data:${mime};base64,${b64}` },
-              },
-            ],
-          },
-        ],
-      },
-      {
-        timeout: 45000,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://symwellness.app',
-          'X-Title': process.env.OPENROUTER_APP_TITLE || 'Sym Calorie Scan',
+  const models = visionModelCandidates();
+  let lastErr = null;
+
+  for (const model of models) {
+    try {
+      const res = await axios.post(
+        process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model,
+          temperature: 0.2,
+          max_tokens: 1200,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                {
+                  type: 'image_url',
+                  image_url: { url: `data:${mime};base64,${b64}` },
+                },
+              ],
+            },
+          ],
         },
-      },
-    );
+        {
+          timeout: 45000,
+          validateStatus: () => true,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://symwellness.app',
+            'X-Title': process.env.OPENROUTER_APP_TITLE || 'Sym Calorie Scan',
+          },
+        },
+      );
 
-    const raw = res.data?.choices?.[0]?.message?.content || '';
-    const jsonMatch = String(raw).match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (parsed?.rejected) {
-      return { rejected: true, reason: String(parsed.reason || 'No food detected') };
+      if (res.status === 404 || res.status === 400 || res.status === 429) {
+        const msg = res.data?.error?.message || `http_${res.status}`;
+        console.warn(`[calorie-scan] vision model unavailable (${model}): ${msg}`);
+        lastErr = new Error(msg);
+        continue;
+      }
+      if (res.status === 402 || /credits|afford|max_tokens/i.test(String(res.data?.error?.message || ''))) {
+        const msg = res.data?.error?.message || `http_${res.status}`;
+        console.warn(`[calorie-scan] vision credits/limit (${model}): ${msg}`);
+        lastErr = new Error(msg);
+        continue;
+      }
+      if (res.status < 200 || res.status >= 300) {
+        const msg = res.data?.error?.message || `http_${res.status}`;
+        throw new Error(msg);
+      }
+
+      const raw = res.data?.choices?.[0]?.message?.content || '';
+      const jsonMatch = String(raw).match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        lastErr = new Error('vision returned no JSON');
+        continue;
+      }
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed?.rejected) {
+        return { rejected: true, reason: String(parsed.reason || 'No food detected') };
+      }
+      if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
+        lastErr = new Error('vision returned empty items');
+        continue;
+      }
+
+      const items = parsed.items.map((i) => ({
+        name: String(i.name || 'Food item'),
+        category: String(i.category || 'meal'),
+        servingEstimate: String(i.servingEstimate || 'estimate'),
+        calories: Math.round(Number(i.calories) || 0),
+        proteinG: Number(i.proteinG) || 0,
+        carbsG: Number(i.carbsG) || 0,
+        fatG: Number(i.fatG) || 0,
+        notes: 'Vision estimate',
+      }));
+
+      const edible = items.filter((i) => i.calories > 0);
+      if (!edible.length) {
+        return { rejected: true, reason: 'No edible food with calories found' };
+      }
+
+      console.info(`[calorie-scan] vision ok via ${model} (${edible.length} item(s))`);
+      const seed = seedFrom(description, edible.length);
+      const namesLabel = foodNamesLabel(edible, 'Meal');
+      return finalizeFromItems({
+        items: edible,
+        mealType: 'lunch',
+        healthGoal,
+        description,
+        seed,
+        dataSource: 'vision',
+        classificationOverride: namesLabel,
+        visionModel: model,
+        macrosOverride: parsed.macros
+          ? {
+              proteinG: Number(parsed.macros.proteinG) || 0,
+              carbsG: Number(parsed.macros.carbsG) || 0,
+              fatG: Number(parsed.macros.fatG) || 0,
+              fiberG: Number(parsed.macros.fiberG) || 0,
+              sugarG: Number(parsed.macros.sugarG) || 0,
+              sodiumMg: Number(parsed.macros.sodiumMg) || 0,
+            }
+          : undefined,
+      });
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[calorie-scan] vision failed (${model}):`, err.message);
     }
-    if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) return null;
-
-    const items = parsed.items.map((i) => ({
-      name: String(i.name || 'Food item'),
-      category: String(i.category || 'meal'),
-      servingEstimate: String(i.servingEstimate || 'estimate'),
-      calories: Math.round(Number(i.calories) || 0),
-      proteinG: Number(i.proteinG) || 0,
-      carbsG: Number(i.carbsG) || 0,
-      fatG: Number(i.fatG) || 0,
-      notes: 'Vision estimate',
-    }));
-
-    const edible = items.filter((i) => i.calories > 0);
-    if (!edible.length) {
-      return { rejected: true, reason: 'No edible food with calories found' };
-    }
-
-    const seed = seedFrom(description, edible.length);
-    return finalizeFromItems({
-      items: edible,
-      mealType: 'lunch',
-      healthGoal,
-      description,
-      seed,
-      dataSource: 'vision',
-      classificationOverride: parsed.mealClassification || 'Balanced',
-      macrosOverride: parsed.macros
-        ? {
-            proteinG: Number(parsed.macros.proteinG) || 0,
-            carbsG: Number(parsed.macros.carbsG) || 0,
-            fatG: Number(parsed.macros.fatG) || 0,
-            fiberG: Number(parsed.macros.fiberG) || 0,
-            sugarG: Number(parsed.macros.sugarG) || 0,
-            sodiumMg: Number(parsed.macros.sodiumMg) || 0,
-          }
-        : undefined,
-    });
-  } catch (err) {
-    console.warn('[calorie-scan] vision failed:', err.message);
-    return null;
   }
+
+  if (lastErr) {
+    console.warn('[calorie-scan] all vision models failed:', lastErr.message);
+  }
+  return null;
 }
 
 function scaleDbProductToEstimatedCalories(product, estimatedCalories) {
@@ -586,7 +782,7 @@ async function groundVisionItemsWithFatsecret(visionItems) {
       ...scaled,
       servingEstimate: v.servingEstimate || scaled.servingEstimate || '1 serving',
       name,
-      notes: `Matched to FatSecret average (${db.name})`,
+      notes: `Matched to database average (${db.name})`,
     });
   }
   return grounded.length ? grounded : null;
@@ -668,7 +864,7 @@ async function buildAnalysis(opts = {}) {
         ? 'Barcode not in database'
         : 'No barcode found',
       analysisUserNote: candidates[0]
-        ? `We read barcode ${candidates[0]} but it was not found in FatSecret or Open Food Facts. Try another package or use Nutri facts / Scan Food.`
+        ? `We read barcode ${candidates[0]} but it was not found in our food databases. Try another package or use Nutri facts / Scan Food.`
         : 'No barcode digits detected. Center the UPC/EAN bars in the frame and retake.',
       recommendations: [
         candidates[0]
@@ -738,10 +934,11 @@ async function buildAnalysis(opts = {}) {
   }
 
   // ── Scan food photo pipeline ────────────────────────────────────────────
-  // 1) FatSecret Image Recognition (US / English) — primary
-  // 2) Menu/label OCR calorie callout grounded in FatSecret text
-  // 3) OpenRouter vision — fallback only when FatSecret finds nothing
-  if (mode === 'scan_food' && imagePath && fsReady) {
+  // Default: free OpenRouter vision → FatSecret text search (no paid IR).
+  // Set FATSECRET_IMAGE_RECOGNITION=true to enable FatSecret Image Recognition.
+  const useFatsecretIr =
+    String(process.env.FATSECRET_IMAGE_RECOGNITION || '').toLowerCase() === 'true';
+  if (mode === 'scan_food' && imagePath && fsReady && useFatsecretIr) {
     console.info('[calorie-scan] primary: FatSecret image recognition (US/en)');
     const recognized = await fatsecretFood.recognizeImage(imagePath);
     if (recognized?.length) {
@@ -752,14 +949,24 @@ async function buildAnalysis(opts = {}) {
         seed,
       });
       analysis.dataSource = 'fatsecret';
-      analysis.analysisUserNote =
-        'Identified by FatSecret image recognition (United States · English). '
-        + 'Portions are estimates — adjust if your serving differs.';
+      analysis.analysisUserNote = null;
       analysis.recommendations = [
-        'Matched to FatSecret’s verified US nutrition database.',
+        'Matched in our nutrition database — portions are estimates.',
         ...(analysis.recommendations || []).slice(0, 3),
       ];
       return analysis;
+    }
+    const fsDiag = fatsecretClient.getDiagnostics?.() || {};
+    if (fsDiag.lastApiError?.code === 'FS_INVALID_IP') {
+      console.error(
+        '[calorie-scan] FatSecret blocked (invalid IP). '
+          + 'Register public IP in FatSecret dashboard, then retry.',
+      );
+    } else if (fsDiag.lastApiError?.code === 'FS_MISSING_SCOPE') {
+      console.error(
+        '[calorie-scan] FatSecret missing image-recognition scope. '
+          + 'Activate IR add-on / trial in FatSecret dashboard.',
+      );
     }
     console.info('[calorie-scan] FatSecret IR found nothing — trying secondary paths');
   }
@@ -784,15 +991,16 @@ async function buildAnalysis(opts = {}) {
           },
           { mealType, healthGoal, description: description || hintedName, seed },
         );
-        out.analysisUserNote =
-          'Calories were read from visible menu/label text and macros were matched to FatSecret average values (US).';
+        out.analysisUserNote = null;
+        out.sourceTitle = 'Label reading';
+        out.sourceSubtitle = foodNamesLabel([{ name: hintedName }], 'Menu item');
         return out;
       }
     }
   }
 
   if (mode === 'scan_food' && imagePath) {
-    console.info('[calorie-scan] fallback: OpenRouter vision');
+    console.info('[calorie-scan] primary: OpenRouter free vision → FatSecret text');
     const vision = await analyzePlateWithVision(imagePath, description, healthGoal);
     if (vision?.rejected) {
       return buildRejectedAnalysis({
@@ -810,7 +1018,9 @@ async function buildAnalysis(opts = {}) {
       });
     }
     if (vision && !vision.rejected) {
-      const grounded = await groundVisionItemsWithFatsecret(vision.items);
+      // finalizeFromItems returns full analysis; expose items for grounding
+      const visionItems = vision.items || [];
+      const grounded = await groundVisionItemsWithFatsecret(visionItems);
       if (grounded?.length) {
         const out = productsToAnalysis(grounded, {
           mealType,
@@ -820,17 +1030,18 @@ async function buildAnalysis(opts = {}) {
         });
         if (out) {
           out.dataSource = 'vision_grounded';
-          out.analysisUserNote =
-            'FatSecret did not recognize this photo directly. Food was identified with AI, '
-            + 'then calories/macros were matched to FatSecret US average entries.';
+          out.visionModel = null;
+          const meta = buildSourceMeta('vision_grounded', grounded, {});
+          out.sourceTitle = meta.sourceTitle;
+          out.sourceSubtitle = meta.sourceSubtitle;
+          out.analysisUserNote = null;
+          out.mealClassification = foodNamesLabel(grounded, out.mealClassification);
           return out;
         }
       }
       vision.mealType = mealType;
       vision.dataSource = vision.dataSource || 'vision';
-      vision.analysisUserNote =
-        (vision.analysisUserNote || '')
-        || 'FatSecret image recognition found no match — estimate from AI vision (verify against a food label when possible).';
+      vision.analysisUserNote = null;
       return vision;
     }
 
@@ -841,11 +1052,11 @@ async function buildAnalysis(opts = {}) {
       seed,
       mealClassification: 'Could not identify food',
       analysisUserNote:
-        'Neither FatSecret image recognition nor AI could confidently identify food in this photo. '
+        'We could not confidently identify food in this photo. '
         + 'Retake with the meal centered and well lit, or describe the meal in Meal details.',
       recommendations: [
         'Center the food, use bright light, and avoid covering the plate with your hand.',
-        'Or open Meal details, describe what you ate, and tap Analyze with FatSecret.',
+        'Or open Meal details, describe what you ate, and tap Analyze.',
       ],
       detectedScene: 'unclear',
     });
@@ -910,8 +1121,7 @@ async function buildAnalysis(opts = {}) {
     seed,
     dataSource: 'rules',
   });
-  analysis.analysisUserNote =
-    'Estimate from your description (database match unavailable). Prefer a barcode or label scan for packaged foods.';
+  analysis.analysisUserNote = null;
   return analysis;
 }
 
