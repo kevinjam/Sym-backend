@@ -530,19 +530,27 @@ async function createSubscriptionPaymentSheet({
     existingCustomerId,
   });
 
-  // Don't start a second paid sub if one is already live.
+  // Clear abandoned PaymentSheet / wallet attempts (incomplete + trial-without-PM).
+  // Trial plans become `trialing` immediately — if the user never completed Apple Pay /
+  // PaymentSheet, that orphan blocks a second subscribe with ALREADY_SUBSCRIBED.
+  await cancelAbandonedCheckoutSubscriptions(customer.id);
+
+  // Don't start a second paid sub if one is already live *with* a payment method.
   const existingActive = await fetchActiveSubscriptionForCustomer(customer.id);
   if (
     existingActive &&
     (existingActive.status === 'active' || existingActive.status === 'trialing')
   ) {
-    const err = new Error('You already have an active SymWellness Premium subscription.');
-    err.code = 'ALREADY_SUBSCRIBED';
-    throw err;
+    if (subscriptionHasPaymentMethod(existingActive)) {
+      const err = new Error(
+        'You already have an active SymWellness Premium subscription.',
+      );
+      err.code = 'ALREADY_SUBSCRIBED';
+      throw err;
+    }
+    // Orphan without PM (race) — cancel and continue.
+    await cancelSubscriptionQuietly(existingActive.id);
   }
-
-  // Clear abandoned PaymentSheet attempts so the customer isn't stuck.
-  await cancelIncompleteSubscriptions(customer.id);
 
   const subscriptionParams = {
     customer: customer.id,
@@ -760,23 +768,56 @@ async function resolveSubscriptionClientSecrets(stripe, subscription) {
   };
 }
 
+function subscriptionHasPaymentMethod(subscription) {
+  if (!subscription) return false;
+  return Boolean(
+    subscription.default_payment_method || subscription.default_source,
+  );
+}
+
+async function cancelSubscriptionQuietly(subscriptionId) {
+  const stripe = stripeClient();
+  try {
+    await stripe.subscriptions.cancel(subscriptionId);
+  } catch (err) {
+    console.warn(
+      `[Stripe] Failed to cancel subscription ${subscriptionId}:`,
+      err.message,
+    );
+  }
+}
+
 async function cancelIncompleteSubscriptions(customerId) {
+  await cancelAbandonedCheckoutSubscriptions(customerId);
+}
+
+/**
+ * Cancel checkout leftovers so the user can retry subscribe:
+ * - incomplete PaymentSheet attempts
+ * - trialing/active with no payment method (abandoned Apple Pay / sheet)
+ */
+async function cancelAbandonedCheckoutSubscriptions(customerId) {
   const stripe = stripeClient();
   const list = await stripe.subscriptions.list({
     customer: customerId,
-    status: 'incomplete',
-    limit: 10,
+    status: 'all',
+    limit: 20,
   });
-  await Promise.all(
-    list.data.map((sub) =>
-      stripe.subscriptions.cancel(sub.id).catch((err) => {
-        console.warn(
-          `[Stripe] Failed to cancel incomplete sub ${sub.id}:`,
-          err.message,
-        );
-      }),
-    ),
-  );
+
+  const toCancel = list.data.filter((sub) => {
+    if (sub.status === 'incomplete' || sub.status === 'incomplete_expired') {
+      return true;
+    }
+    if (
+      (sub.status === 'trialing' || sub.status === 'active') &&
+      !subscriptionHasPaymentMethod(sub)
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  await Promise.all(toCancel.map((sub) => cancelSubscriptionQuietly(sub.id)));
 }
 
 async function retrieveSubscription(subscriptionId) {

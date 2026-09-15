@@ -422,6 +422,7 @@ async function createPaymentSheet(req, res) {
     return res.status(status).json({
       success: false,
       error: error.message || 'Unable to prepare in-app checkout.',
+      code: error.code || undefined,
     });
   }
 }
