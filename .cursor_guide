@@ -1,0 +1,105 @@
+Content sourcing for Daily Insights
+------------------------------------
+Use Sym-authored or licensed wellness copy only (see docs/daily-insights-sources.md).
+Do NOT scrape patient.info or other clinical publishers without written permission —
+their terms typically forbid commercial crawling / reuse for apps and datasets.
+Expand the catalog via utils/dailyInsightSeedData.js or licensed imports.
+
+1. General health ⭐
+
+Probably your most important category.
+
+Use it for:
+
+Daily wellness insights
+Energy and lifestyle
+Healthy routines
+General preventive health education
+Understanding how habits affect wellbeing
+2. Healthy living ⭐
+
+Excellent fit for SymWellness.
+
+Use it for:
+
+Sleep habits
+Physical activity
+Hydration
+Stress management
+Healthy routines
+Preventive lifestyle recommendations
+3. Diet and nutrition ⭐
+
+Very relevant if your app provides nutrition and wellness insights.
+
+Use it for:
+
+Healthy eating
+Balanced diets
+Food education
+Vitamins and nutrients
+Hydration
+General nutrition insights
+4. Weight loss management ⭐
+
+Only include this if you want weight management to remain an important feature.
+
+Frame it around:
+
+Healthy weight goals
+Sustainable habits
+Activity
+Nutrition
+Progress tracking
+
+Avoid positioning it as treatment for obesity or medical weight-loss management.
+
+5. Mental health ⚠️ Selectively
+
+You can use content related to:
+
+Stress management
+Mindfulness
+Relaxation
+Sleep
+Emotional wellbeing
+
+However, I would not build SymWellness around diagnosing or treating mental health conditions.
+
+You could internally frame this section in your app as Mindfulness & Wellbeing rather than "Mental Health."
+
+6. Bones, joints and muscles ⚠️ Selectively
+
+Useful for preventive wellness content such as:
+
+Mobility
+Stretching
+Posture
+Exercise
+Muscle recovery
+Staying active
+
+Avoid disease-specific or injury-treatment content.
+
+7. Heart health and blood vessels ⚠️ Preventive content only
+
+This can be useful for general prevention:
+
+Exercise
+Healthy eating
+Sleep
+Stress
+Heart-healthy lifestyle habits
+
+But avoid turning SymWellness into a cardiovascular disease management app.
+
+8. Digestive health ⚠️ Selectively
+
+Good for general wellness insights:
+
+Gut-friendly nutrition
+Hydration
+Fiber
+Healthy eating habits
+
+Avoid content focused heavily on diagnosing digestive diseases.

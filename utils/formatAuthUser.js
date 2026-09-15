@@ -34,6 +34,49 @@ function formatAuthUser(user) {
     termsAcceptedAt: toIso(user.termsAcceptedAt),
     termsAcceptedVersion: user.termsAcceptedVersion || null,
     requiredTermsVersion: REQUIRED_TERMS_VERSION,
+    hasCompletedFeatureOnboarding: Boolean(user.hasCompletedFeatureOnboarding),
+    featureOnboarding: user.featureOnboarding
+      ? {
+          skipped: Boolean(user.featureOnboarding.skipped),
+          completedAt: toIso(user.featureOnboarding.completedAt),
+          goals: Array.isArray(user.featureOnboarding.goals)
+            ? user.featureOnboarding.goals
+            : [],
+          primaryGoal: user.featureOnboarding.primaryGoal ?? null,
+          birthYear: user.featureOnboarding.birthYear ?? null,
+          heightFt: user.featureOnboarding.heightFt ?? null,
+          heightIn: user.featureOnboarding.heightIn ?? null,
+          weightWhole: user.featureOnboarding.weightWhole ?? null,
+          weightDec: user.featureOnboarding.weightDec ?? null,
+          weightUnit: user.featureOnboarding.weightUnit ?? null,
+          sleepGoals: Array.isArray(user.featureOnboarding.sleepGoals)
+            ? user.featureOnboarding.sleepGoals
+            : [],
+          nutritionGoals: Array.isArray(user.featureOnboarding.nutritionGoals)
+            ? user.featureOnboarding.nutritionGoals
+            : [],
+          hcpRecommended:
+            user.featureOnboarding.hcpRecommended === true ||
+            user.featureOnboarding.hcpRecommended === false
+              ? user.featureOnboarding.hcpRecommended
+              : null,
+          preferWithSym:
+            user.featureOnboarding.preferWithSym === true ||
+            user.featureOnboarding.preferWithSym === false
+              ? user.featureOnboarding.preferWithSym
+              : null,
+          selectedPlanOption: user.featureOnboarding.selectedPlanOption ?? null,
+          healthWrite: Array.isArray(user.featureOnboarding.healthWrite)
+            ? user.featureOnboarding.healthWrite
+            : [],
+          healthRead: Array.isArray(user.featureOnboarding.healthRead)
+            ? user.featureOnboarding.healthRead
+            : [],
+          healthAccessGranted: Boolean(
+            user.featureOnboarding.healthAccessGranted,
+          ),
+        }
+      : null,
   };
 }
 

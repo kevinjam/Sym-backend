@@ -31,7 +31,26 @@ class SchedulerService {
       await this.cleanupOldNotifications();
     });
 
+    // Daily insights for the UTC calendar day (runs at 00:05 UTC).
+    cron.schedule('5 0 * * *', async () => {
+      await this.selectDailyInsights();
+    });
+
     console.log('🕐 Medication scheduler initialized');
+  }
+
+  async selectDailyInsights() {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return;
+      }
+      const {
+        ensureTodaySelected,
+      } = require('../services/dailyInsightService');
+      await ensureTodaySelected();
+    } catch (error) {
+      console.error('[daily-insights] Daily selection failed:', error);
+    }
   }
 
   // Check for medication reminders
