@@ -149,6 +149,11 @@ app.get('/api/public/version', (req, res) => {
   });
 });
 
+const onboardingContentRoutes = require('./routes/onboardingContent');
+app.use('/api/public/onboarding', onboardingContentRoutes);
+const dailyInsightRoutes = require('./routes/dailyInsights');
+app.use('/api/public/daily-insights', dailyInsightRoutes);
+
 // Protected routes (authentication required)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
@@ -268,6 +273,15 @@ async function startServer() {
       await ensureMindfulnessCatalogSeeded();
     } catch (seedErr) {
       console.warn('[mindfulness-catalog] Startup seed skipped:', seedErr.message);
+    }
+
+    try {
+      const {
+        ensureTodaySelected,
+      } = require('./services/dailyInsightService');
+      await ensureTodaySelected();
+    } catch (seedErr) {
+      console.warn('[daily-insights] Startup seed/selection skipped:', seedErr.message);
     }
 
     await resolveStorageMode();

@@ -76,7 +76,7 @@ const BASE_PLAN_FEATURES = [
 ];
 
 const ANNUAL_PLAN_FEATURE = {
-  title: 'Monthly Wellness Reports',
+  title: 'Daily insights',
   subtitle: 'AI-compiled data summary with insights',
 };
 

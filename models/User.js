@@ -112,6 +112,35 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  /** Flo-style feature onboarding (goals, body metrics, preferences). */
+  hasCompletedFeatureOnboarding: {
+    type: Boolean,
+    default: false,
+  },
+  featureOnboarding: {
+    skipped: { type: Boolean, default: false },
+    completedAt: { type: Date, default: null },
+    goals: [{ type: String }],
+    primaryGoal: { type: String, default: null },
+    birthYear: { type: String, default: null },
+    heightFt: { type: Number, default: null },
+    heightIn: { type: Number, default: null },
+    weightWhole: { type: Number, default: null },
+    weightDec: { type: Number, default: null },
+    weightUnit: { type: String, enum: ['lb', 'kg'] },
+    sleepGoals: [{ type: String }],
+    nutritionGoals: [{ type: String }],
+    hcpRecommended: { type: Boolean },
+    preferWithSym: { type: Boolean },
+    selectedPlanOption: {
+      type: String,
+      enum: ['trial', 'yearly', 'monthly'],
+      default: null,
+    },
+    healthWrite: [{ type: String }],
+    healthRead: [{ type: String }],
+    healthAccessGranted: { type: Boolean, default: false },
+  },
   createdAt: {
     type: Date,
     default: Date.now
