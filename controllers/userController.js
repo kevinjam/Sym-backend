@@ -108,7 +108,7 @@ async function saveFeatureOnboarding(req, res) {
         body.selectedPlanOption,
       )
         ? body.selectedPlanOption
-        : null,
+        : undefined,
       healthWrite: asStringArray(body.healthWrite),
       healthRead: asStringArray(body.healthRead),
       healthAccessGranted: body.healthAccessGranted === true,
