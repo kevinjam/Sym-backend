@@ -127,14 +127,19 @@ const userSchema = new mongoose.Schema({
     heightIn: { type: Number, default: null },
     weightWhole: { type: Number, default: null },
     weightDec: { type: Number, default: null },
-    weightUnit: { type: String, enum: ['lb', 'kg'] },
+    weightUnit: {
+      type: String,
+      enum: ['lb', 'kg', null],
+      default: null,
+    },
     sleepGoals: [{ type: String }],
     nutritionGoals: [{ type: String }],
     hcpRecommended: { type: Boolean },
     preferWithSym: { type: Boolean },
+    // null = not chosen yet / skipped — must be in enum or login save() fails
     selectedPlanOption: {
       type: String,
-      enum: ['trial', 'yearly', 'monthly'],
+      enum: ['trial', 'yearly', 'monthly', null],
       default: null,
     },
     healthWrite: [{ type: String }],
