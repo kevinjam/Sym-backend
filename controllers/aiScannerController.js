@@ -625,13 +625,11 @@ const callAIProvider = async (providerName, config, images, prompt) => {
 const callOpenRouter = async (config, images, prompt) => {
   // Prefer model IDs that are currently active on OpenRouter.
   // Can be overridden via OPENROUTER_MODELS="model-a,model-b,..."
-  const models = (
-    process.env.OPENROUTER_MODELS ||
-    'google/gemini-2.0-flash-001,google/gemini-1.5-flash,meta-llama/llama-3.2-11b-vision-instruct,qwen/qwen2.5-vl-72b-instruct'
-  )
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
+  const { visionModelCandidates } = require('../constants/openRouterModels');
+  const models = visionModelCandidates({
+    envCsv: process.env.OPENROUTER_MODELS,
+    includePaid: true,
+  });
 
   if (!models.length) {
     throw new Error('No OpenRouter models configured');
@@ -1362,13 +1360,10 @@ const callAIProviderForText = async (providerName, config, prompt) => {
 };
 
 const callOpenRouterText = async (config, prompt) => {
-  const models = (
-    process.env.OPENROUTER_TEXT_MODELS ||
-    'openai/gpt-4o-mini,anthropic/claude-3-haiku-20240307,meta-llama/llama-3.3-70b-instruct'
-  )
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
+  const { textModelCandidates } = require('../constants/openRouterModels');
+  const models = textModelCandidates({
+    envCsv: process.env.OPENROUTER_TEXT_MODELS,
+  });
 
   if (!models.length) {
     throw new Error('No OpenRouter text models configured');

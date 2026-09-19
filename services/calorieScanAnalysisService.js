@@ -8,6 +8,7 @@ const fatsecretFood = require('./fatsecretFoodService');
 const fatsecretClient = require('./fatsecretClient');
 const { ocrImage, parseNutritionFactsLabel, extractMenuCalorieCallout } = require('./nutritionOcrService');
 const { gateScanImage } = require('./scanImageGateService');
+const { FREE_VISION_MODELS } = require('../constants/openRouterModels');
 
 /**
  * Sym Calorie Scan — mode-aware meal analysis.
@@ -605,11 +606,7 @@ function visionModelCandidates() {
     process.env.CALORIE_SCAN_VISION_MODEL ||
     process.env.OPENROUTER_VISION_MODEL ||
     'google/gemma-4-26b-a4b-it:free';
-  const freeFallbacks = [
-    'google/gemma-4-26b-a4b-it:free',
-    'google/gemma-4-31b-it:free',
-    'nvidia/nemotron-nano-12b-v2-vl:free',
-  ];
+  const freeFallbacks = FREE_VISION_MODELS;
   const paidFallback =
     String(process.env.CALORIE_SCAN_ALLOW_PAID_VISION || '').toLowerCase() ===
     'true'

@@ -1,6 +1,7 @@
 const MedicationLog = require('../models/MedicationLog');
 const PatientMedication = require('../models/PatientMedication');
 const Medication = require('../models/Medication');
+const { textModelCandidates } = require('../constants/openRouterModels');
 
 // Helper function to get adherence data without sending response
 const getAdherenceDataOnly = async (patientId, days = 30) => {
@@ -443,12 +444,18 @@ Respond in JSON format:
 
     let aiInsights = {};
     let retryCount = 0;
-    const maxRetries = 5; // Reduced back to 5 retries
-    const baseDelay = 2000; // Reduced base delay to 2 seconds
+    const maxRetries = 5;
+    const baseDelay = 2000;
+    const modelCandidates = textModelCandidates({
+      envPrimary: process.env.AI_HEALTH_MODEL,
+      envFallback: process.env.AI_HEALTH_FALLBACK_MODEL,
+      envCsv: process.env.OPENROUTER_TEXT_MODELS,
+    });
 
     while (retryCount < maxRetries) {
       try {
-        console.log(`🔄 Attempting AI insights generation (attempt ${retryCount + 1}/${maxRetries})`);
+        const model = modelCandidates[Math.min(retryCount, modelCandidates.length - 1)];
+        console.log(`🔄 Attempting AI insights generation (attempt ${retryCount + 1}/${maxRetries}) model=${model}`);
         
         const openRouterResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
@@ -459,9 +466,7 @@ Respond in JSON format:
             'X-Title': 'Sym Health App - Adherence Insights'
           },
           body: JSON.stringify({
-            model: retryCount > 1 ?
-              (process.env.AI_HEALTH_FALLBACK_MODEL || 'mistralai/mistral-7b-instruct:free') :
-              (process.env.AI_HEALTH_MODEL || 'meta-llama/llama-3.1-8b-instruct:free'),
+            model,
             messages: [
               {
                 role: 'user',

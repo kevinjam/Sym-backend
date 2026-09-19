@@ -1,6 +1,7 @@
 'use strict';
 
 const axios = require('axios');
+const { textModelCandidates } = require('../constants/openRouterModels');
 
 function normalizeOpenRouterContent(content) {
   if (!content) return '';
@@ -25,13 +26,9 @@ function normalizeOpenRouterContent(content) {
  * @returns {Promise<{ text: string, model: string, provider: string }>}
  */
 async function callOpenRouterChatRaw({ apiKey, prompt, messages, maxTokens = 2500 }) {
-  const models = (
-    process.env.OPENROUTER_TEXT_MODELS ||
-    'openai/gpt-4o-mini,anthropic/claude-3-haiku-20240307,meta-llama/llama-3.3-70b-instruct'
-  )
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
+  const models = textModelCandidates({
+    envCsv: process.env.OPENROUTER_TEXT_MODELS,
+  });
 
   if (!apiKey) {
     throw new Error('OPENROUTER_API_KEY is not configured');
@@ -55,7 +52,11 @@ async function callOpenRouterChatRaw({ apiKey, prompt, messages, maxTokens = 250
     try {
       const response = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
-        { ...payloadBase, model },
+        {
+          ...payloadBase,
+          model,
+          provider: { allow_fallbacks: true },
+        },
         {
           headers: {
             Authorization: `Bearer ${apiKey}`,
