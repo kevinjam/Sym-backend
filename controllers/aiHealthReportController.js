@@ -1,34 +1,24 @@
 const AiHealthReport = require('../models/AiHealthReport');
+const { textModelCandidates } = require('../constants/openRouterModels');
 
 /** OpenRouter chat completions (see https://openrouter.ai/docs/quickstart) */
 const OPENROUTER_CHAT_URL =
   process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
 
-/**
- * Default model chain when env models 404 or are deprecated.
- * OpenRouter retires/renames free models often — keep several options.
- */
-const DEFAULT_AI_HEALTH_MODEL_CHAIN = [
-  'meta-llama/llama-3.1-8b-instruct:free',
-  'mistralai/mistral-7b-instruct:free',
-  'google/gemma-2-9b-it:free',
-  'deepseek/deepseek-chat',
-];
-
 function buildHealthModelCandidates() {
-  const primary = process.env.AI_HEALTH_MODEL || DEFAULT_AI_HEALTH_MODEL_CHAIN[0];
-  const secondary = process.env.AI_HEALTH_FALLBACK_MODEL;
-  const ordered = [primary, secondary, ...DEFAULT_AI_HEALTH_MODEL_CHAIN].filter(Boolean);
-  return [...new Set(ordered)];
+  return textModelCandidates({
+    envPrimary: process.env.AI_HEALTH_MODEL,
+    envFallback: process.env.AI_HEALTH_FALLBACK_MODEL,
+    envCsv: process.env.OPENROUTER_TEXT_MODELS,
+  });
 }
 
 function shouldTryNextModelForOpenRouter(status, bodyText) {
-  if (status === 404) return true;
+  if ([400, 402, 403, 404, 408, 429, 500, 502, 503].includes(status)) return true;
   const t = (bodyText || '').toLowerCase();
-  if (status === 400 && /no endpoints|model not found|invalid model|unknown model|does not exist|not supported/.test(t)) {
-    return true;
-  }
-  return false;
+  return /no endpoints|model not found|invalid model|unknown model|does not exist|not supported|quota|credits|provider returned error|provider error/.test(
+    t
+  );
 }
 
 /**
@@ -54,6 +44,7 @@ async function openRouterChatCompletion(model, messages) {
         messages,
         max_tokens: maxTokens,
         temperature: 0.3,
+        provider: { allow_fallbacks: true },
       }),
     });
     const text = await response.text();
@@ -153,7 +144,10 @@ Respond only with valid JSON, no additional text.`;
     ];
 
     const modelCandidates = buildHealthModelCandidates();
-    const maxRateRetries = parseInt(process.env.AI_HEALTH_MAX_RETRIES, 10) || 6;
+    const maxRateRetries = Math.min(
+      parseInt(process.env.AI_HEALTH_MAX_RETRIES, 10) || 2,
+      3
+    );
 
     let aiData = null;
     let lastOpenRouterResult = null;
@@ -194,7 +188,7 @@ Respond only with valid JSON, no additional text.`;
           });
 
           if (result.status === 429 && attempt < maxRateRetries) {
-            const waitTime = Math.pow(2, attempt) * 5000;
+            const waitTime = 1000 * (attempt + 1);
             console.log(`🤖 Rate limited — waiting ${waitTime}ms before retry`);
             await new Promise((r) => setTimeout(r, waitTime));
             continue;
@@ -209,7 +203,7 @@ Respond only with valid JSON, no additional text.`;
         } catch (fetchError) {
           console.error('🤖 OpenRouter request failed:', fetchError.message || fetchError);
           if (attempt < maxRateRetries) {
-            const waitTime = Math.pow(2, attempt) * 5000;
+            const waitTime = 1000 * (attempt + 1);
             await new Promise((r) => setTimeout(r, waitTime));
             continue;
           }

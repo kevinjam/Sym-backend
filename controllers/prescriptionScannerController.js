@@ -355,10 +355,11 @@ const callAIProviderWithImage = async (providerName, config, base64Image, mimeTy
  * Call OpenRouter API for prescription parsing
  */
 const callOpenRouterForPrescription = async (config, base64Image, mimeType, prompt) => {
-  const models = [
-    'google/gemini-2.0-flash-exp:free',
-    'google/gemini-1.5-flash:free'
-  ];
+  const { visionModelCandidates } = require('../constants/openRouterModels');
+  const models = visionModelCandidates({
+    envCsv: process.env.OPENROUTER_MODELS,
+    includePaid: true,
+  });
 
   const dataUrl = `data:${mimeType};base64,${base64Image}`;
 

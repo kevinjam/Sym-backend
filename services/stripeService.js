@@ -38,6 +38,19 @@ function isConfigured() {
   return getSecretKey().length > 0;
 }
 
+/**
+ * Ephemeral keys MUST use the mobile Stripe SDK API version, not the Node
+ * SDK's latest platform version. iOS StripeCore 24.7 still reports
+ * `2020-08-27`. A mismatch makes PaymentSheet hang after
+ * `applySettings()` with no error.
+ */
+function mobileEphemeralKeyApiVersion() {
+  return (
+    process.env.STRIPE_MOBILE_API_VERSION ||
+    '2020-08-27'
+  );
+}
+
 function stripeClient() {
   const key = getSecretKey();
   if (!key) {
@@ -489,13 +502,9 @@ async function changeSubscriptionPlan(subscriptionId, planId) {
  */
 async function createSetupPaymentMethodSession({ customerId }) {
   const stripe = stripeClient();
-  // Ephemeral keys must declare an API version; keep it aligned with the
-  // installed stripe Node SDK (avoids outdated-version warnings).
-  const apiVersion =
-    process.env.STRIPE_API_VERSION || Stripe.API_VERSION || '2026-07-29.dahlia';
   const ephemeralKey = await stripe.ephemeralKeys.create(
     { customer: customerId },
-    { apiVersion },
+    { apiVersion: mobileEphemeralKeyApiVersion() },
   );
   const setupIntent = await stripe.setupIntents.create({
     customer: customerId,
@@ -576,11 +585,9 @@ async function createSubscriptionPaymentSheet({
 
   const subscription = await stripe.subscriptions.create(subscriptionParams);
 
-  const apiVersion =
-    process.env.STRIPE_API_VERSION || Stripe.API_VERSION || '2026-07-29.dahlia';
   const ephemeralKey = await stripe.ephemeralKeys.create(
     { customer: customer.id },
-    { apiVersion },
+    { apiVersion: mobileEphemeralKeyApiVersion() },
   );
 
   const secrets = await resolveSubscriptionClientSecrets(stripe, subscription);
@@ -780,6 +787,7 @@ async function cancelSubscriptionQuietly(subscriptionId) {
   try {
     await stripe.subscriptions.cancel(subscriptionId);
   } catch (err) {
+    if (err?.code === 'resource_missing') return;
     console.warn(
       `[Stripe] Failed to cancel subscription ${subscriptionId}:`,
       err.message,
