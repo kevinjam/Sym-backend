@@ -224,6 +224,9 @@ async function getStatus(req, res) {
       } catch (syncErr) {
         console.warn('[Subscription] Stripe sync failed, using cache:', syncErr.message);
       }
+    } else if (doc?.hasPremium && !doc?.stripeCustomerId) {
+      // Ghost premium after sign-out / re-signup with no Stripe customer.
+      doc = null;
     }
 
     return res.json({
@@ -890,15 +893,13 @@ async function restoreSubscription(req, res) {
     if (existing?.stripeCustomerId) {
       doc = await syncFromStripeCustomer(userId, existing.stripeCustomerId);
     } else {
-      // Fallback: look up Stripe customer by account email
+      // Fallback: look up Stripe customer by account email (do not create).
       const user = await User.findById(userId).select('email');
       if (user?.email) {
-        const customer = await stripeService.ensureCustomer({
-          userId,
-          email: user.email,
-          existingCustomerId: null,
-        });
-        doc = await syncFromStripeCustomer(userId, customer.id);
+        const customer = await stripeService.findCustomerByEmail(user.email);
+        if (customer) {
+          doc = await syncFromStripeCustomer(userId, customer.id);
+        }
       }
     }
 
