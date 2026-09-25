@@ -19,9 +19,31 @@ function subscriptionLookupFilter(userId) {
   return filter;
 }
 
+// Dev/QA override only. Never honored in production, even if the env var
+// leaks into a production config.
 function isForcePremium() {
-  return String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '')
-    .toLowerCase() === 'true';
+  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+    return false;
+  }
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '').trim().toLowerCase(),
+  );
+}
+
+// Mirrors the client FeatureAccessPolicy: the lite plan only unlocks these.
+const LITE_FEATURES = new Set(['calorieScan', 'exercisePlans']);
+
+function isLitePlan(doc) {
+  const product = String(doc?.productIdentifier || '').toLowerCase();
+  const litePrice = String(process.env.STRIPE_PRICE_LITE || '').toLowerCase();
+  if (litePrice && product === litePrice) return true;
+  return product.includes('lite') || product.includes('calorie');
+}
+
+function planAllowsFeature(doc, feature) {
+  if (!feature) return true;
+  if (isLitePlan(doc)) return LITE_FEATURES.has(feature);
+  return true;
 }
 
 function entitlementStillValid(doc) {
@@ -53,6 +75,15 @@ async function requirePremium(req, res, next) {
         error: 'Premium subscription required.',
         code: 'SUBSCRIPTION_REQUIRED',
         feature: req.requiredFeature || null,
+      });
+    }
+
+    if (!planAllowsFeature(doc, req.requiredFeature)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Your plan does not include this feature.',
+        code: 'SUBSCRIPTION_REQUIRED',
+        feature: req.requiredFeature,
       });
     }
 
@@ -89,4 +120,6 @@ module.exports = {
   requirePremium,
   requireFeature,
   entitlementStillValid,
+  planAllowsFeature,
+  isForcePremium,
 };

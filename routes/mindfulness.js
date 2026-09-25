@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/requirePremium');
 const {
   postDiscover,
   listSearchHistory,
@@ -14,7 +15,7 @@ const {
   listCatalog,
 } = require('../controllers/mindfulnessController');
 
-router.post('/discover', authenticateToken, postDiscover);
+router.post('/discover', authenticateToken, requireFeature('aiMindfulness'), postDiscover);
 router.get('/catalog', authenticateToken, listCatalog);
 router.get('/searches', authenticateToken, listSearchHistory);
 router.get('/library', authenticateToken, listLibrary);
