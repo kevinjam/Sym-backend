@@ -39,6 +39,10 @@ function forcePremiumUserIds() {
 }
 
 function isForcePremiumEnabledFor(userId) {
+  // Dev/QA override only — never honored in production.
+  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+    return false;
+  }
   const globalOn = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '').trim().toLowerCase(),
   );
@@ -139,7 +143,7 @@ async function syncFromCheckoutSession(userId, sessionId) {
     session.client_reference_id ||
     session.metadata?.symUserId ||
     null;
-  if (sessionUser && String(sessionUser) !== String(userId)) {
+  if (!sessionUser || String(sessionUser) !== String(userId)) {
     const err = new Error('Checkout session does not belong to this user.');
     err.code = 'SESSION_USER_MISMATCH';
     throw err;
@@ -181,6 +185,19 @@ async function syncFromSubscriptionId(userId, subscriptionId) {
     typeof subscription.customer === 'string'
       ? subscription.customer
       : subscription.customer?.id;
+
+  // Fail closed: without a metadata owner, the subscription must belong to a
+  // Stripe customer already linked to this account. Otherwise any user could
+  // claim someone else's subscription id and receive premium.
+  const ownedByCustomer =
+    existing?.stripeCustomerId &&
+    customerId &&
+    String(existing.stripeCustomerId) === String(customerId);
+  if (!metaUser && !ownedByCustomer) {
+    const err = new Error('Subscription does not belong to this user.');
+    err.code = 'SESSION_USER_MISMATCH';
+    throw err;
+  }
 
   if (
     existing?.stripeCustomerId &&
@@ -224,6 +241,9 @@ async function getStatus(req, res) {
       } catch (syncErr) {
         console.warn('[Subscription] Stripe sync failed, using cache:', syncErr.message);
       }
+    } else if (doc?.hasPremium && !doc?.stripeCustomerId) {
+      // Ghost premium after sign-out / re-signup with no Stripe customer.
+      doc = null;
     }
 
     return res.json({
@@ -890,15 +910,13 @@ async function restoreSubscription(req, res) {
     if (existing?.stripeCustomerId) {
       doc = await syncFromStripeCustomer(userId, existing.stripeCustomerId);
     } else {
-      // Fallback: look up Stripe customer by account email
+      // Fallback: look up Stripe customer by account email (do not create).
       const user = await User.findById(userId).select('email');
       if (user?.email) {
-        const customer = await stripeService.ensureCustomer({
-          userId,
-          email: user.email,
-          existingCustomerId: null,
-        });
-        doc = await syncFromStripeCustomer(userId, customer.id);
+        const customer = await stripeService.findCustomerByEmail(user.email);
+        if (customer) {
+          doc = await syncFromStripeCustomer(userId, customer.id);
+        }
       }
     }
 

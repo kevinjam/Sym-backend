@@ -207,6 +207,8 @@ function resolvePriceIdForPlan(planId) {
 
 /**
  * Find or create a Stripe Customer for this Sym user.
+ * Never attach a customer that already belongs to a different Sym account —
+ * a new signup with the same email must pay on its own customer.
  */
 async function ensureCustomer({ userId, email, name, existingCustomerId }) {
   const stripe = stripeClient();
@@ -220,25 +222,36 @@ async function ensureCustomer({ userId, email, name, existingCustomerId }) {
     }
   }
 
+  const uid = String(userId);
   if (email) {
-    const found = await stripe.customers.list({ email, limit: 1 });
-    if (found.data.length > 0) {
-      const customer = found.data[0];
-      await stripe.customers.update(customer.id, {
+    const found = await stripe.customers.list({ email, limit: 5 });
+    const reusable = found.data.find((customer) => {
+      const owner = customer.metadata?.symUserId;
+      return !owner || String(owner) === uid;
+    });
+    if (reusable) {
+      await stripe.customers.update(reusable.id, {
         metadata: {
-          ...(customer.metadata || {}),
-          symUserId: String(userId),
+          ...(reusable.metadata || {}),
+          symUserId: uid,
         },
       });
-      return customer;
+      return reusable;
     }
   }
 
   return stripe.customers.create({
     email: email || undefined,
     name: name || undefined,
-    metadata: { symUserId: String(userId) },
+    metadata: { symUserId: uid },
   });
+}
+
+async function findCustomerByEmail(email) {
+  if (!email) return null;
+  const stripe = stripeClient();
+  const found = await stripe.customers.list({ email, limit: 1 });
+  return found.data[0] || null;
 }
 
 /**
@@ -318,8 +331,21 @@ function planTitleForPriceId(priceId) {
 
 function planIdForPriceId(priceId) {
   const catalog = getPlanCatalog();
-  const match = catalog.packages.find((p) => p.storeProductId === priceId);
-  return match?.id || null;
+  const matches = catalog.packages.filter((p) => p.storeProductId === priceId);
+  if (matches.length === 0) return null;
+  const paid = matches.find((p) => !p.offersTrial);
+  return (paid || matches[0]).id;
+}
+
+function priceIdFromSubscriptionItem(item) {
+  if (!item) return null;
+  const price = item.price;
+  if (typeof price === 'string' && price) return price;
+  if (price && typeof price === 'object' && price.id) return price.id;
+  const plan = item.plan;
+  if (typeof plan === 'string' && plan) return plan;
+  if (plan && typeof plan === 'object' && plan.id) return plan.id;
+  return null;
 }
 
 function centsToDollars(cents) {
@@ -473,16 +499,35 @@ async function resumeSubscription(subscriptionId) {
 
 /**
  * Switch the active subscription to another catalog plan (prorated).
+ * Same-price updates are a no-op so re-signup / "Continue" on the current
+ * plan does not hit Stripe proration errors.
  */
 async function changeSubscriptionPlan(subscriptionId, planId) {
   const stripe = stripeClient();
   const { plan, priceId } = resolvePriceIdForPlan(planId);
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-  const itemId = subscription.items?.data?.[0]?.id;
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+    expand: ['items.data.price'],
+  });
+  const item = subscription.items?.data?.[0];
+  const itemId = item?.id;
   if (!itemId) {
     const err = new Error('Subscription has no billable item to update.');
     err.code = 'NO_SUBSCRIPTION_ITEM';
     throw err;
+  }
+
+  const currentPriceId = priceIdFromSubscriptionItem(item);
+  if (currentPriceId && currentPriceId === priceId) {
+    if (subscription.cancel_at_period_end) {
+      return stripe.subscriptions.update(subscriptionId, {
+        cancel_at_period_end: false,
+        metadata: {
+          ...(subscription.metadata || {}),
+          planId: plan.id,
+        },
+      });
+    }
+    return subscription;
   }
 
   const updated = await stripe.subscriptions.update(subscriptionId, {
@@ -889,10 +934,7 @@ function mapSubscriptionToStatus(subscription) {
     ? new Date(periodEndUnix * 1000).toISOString()
     : null;
 
-  const priceId =
-    item?.price?.id ||
-    item?.plan?.id ||
-    null;
+  const priceId = priceIdFromSubscriptionItem(item);
 
   let mappedStatus = 'free';
   if (isOnTrial) mappedStatus = 'trial';
@@ -965,6 +1007,7 @@ module.exports = {
   getTrialDays,
   getPlanCatalog,
   ensureCustomer,
+  findCustomerByEmail,
   createCheckoutSession,
   createBillingPortalSession,
   getBillingDetails,
