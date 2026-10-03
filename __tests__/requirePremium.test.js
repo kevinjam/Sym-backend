@@ -67,11 +67,28 @@ describe('requirePremium hardening', () => {
     expect(next).toHaveBeenCalled();
   });
 
-  test('force-premium is IGNORED in production', async () => {
+  test('global force-premium is IGNORED in production', async () => {
     process.env.NODE_ENV = 'production';
     process.env.SUBSCRIPTION_FORCE_PREMIUM = 'true';
     UserSubscription.findOne.mockResolvedValue(null);
     const { res, next } = await run('aiChat');
+    expect(res.statusCode).toBe(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('per-user allowlist DOES work in production (reviewer demo account)', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SUBSCRIPTION_FORCE_PREMIUM_USER_IDS = 'reviewer-1, other-2';
+    UserSubscription.findOne.mockResolvedValue(null);
+    const { next } = await run('aiChat', { id: 'reviewer-1' });
+    expect(next).toHaveBeenCalled();
+  });
+
+  test('per-user allowlist does not leak to other accounts', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SUBSCRIPTION_FORCE_PREMIUM_USER_IDS = 'reviewer-1';
+    UserSubscription.findOne.mockResolvedValue(null);
+    const { res, next } = await run('aiChat', { id: 'someone-else' });
     expect(res.statusCode).toBe(403);
     expect(next).not.toHaveBeenCalled();
   });
