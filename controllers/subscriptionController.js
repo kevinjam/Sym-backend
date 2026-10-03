@@ -39,14 +39,17 @@ function forcePremiumUserIds() {
 }
 
 function isForcePremiumEnabledFor(userId) {
-  // Dev/QA override only — never honored in production.
-  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
-    return false;
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+  // The global switch is a blanket bypass for every account — dev/QA only,
+  // never honored in production even if the env var leaks into a prod config.
+  if (!isProd) {
+    const globalOn = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '').trim().toLowerCase(),
+    );
+    if (globalOn) return true;
   }
-  const globalOn = ['1', 'true', 'yes', 'on'].includes(
-    String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '').trim().toLowerCase(),
-  );
-  if (globalOn) return true;
+  // The per-user allowlist is scoped to specific accounts (e.g. an Apple/Google
+  // reviewer demo account) and is safe — and intended — to use in production too.
   if (!userId) return false;
   return forcePremiumUserIds().includes(String(userId));
 }

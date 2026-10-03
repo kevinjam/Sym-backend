@@ -19,8 +19,15 @@ function subscriptionLookupFilter(userId) {
   return filter;
 }
 
-// Dev/QA override only. Never honored in production, even if the env var
-// leaks into a production config.
+function forcePremiumUserIds() {
+  return String(process.env.SUBSCRIPTION_FORCE_PREMIUM_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// The global switch is a blanket bypass for every account — dev/QA only,
+// never honored in production even if the env var leaks into a prod config.
 function isForcePremium() {
   if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
     return false;
@@ -28,6 +35,13 @@ function isForcePremium() {
   return ['1', 'true', 'yes', 'on'].includes(
     String(process.env.SUBSCRIPTION_FORCE_PREMIUM || '').trim().toLowerCase(),
   );
+}
+
+// The per-user allowlist is scoped to specific accounts (e.g. an Apple/Google
+// reviewer demo account) and is safe — and intended — to use in production too.
+function isForcePremiumForUser(userId) {
+  if (!userId) return false;
+  return forcePremiumUserIds().includes(String(userId));
 }
 
 // Mirrors the client FeatureAccessPolicy: the lite plan only unlocks these.
@@ -54,12 +68,13 @@ function entitlementStillValid(doc) {
 
 async function requirePremium(req, res, next) {
   try {
-    if (isForcePremium()) {
+    const userId = req.user?.id || req.user?._id;
+
+    if (isForcePremium() || isForcePremiumForUser(userId)) {
       req.subscription = { hasPremium: true, forced: true };
       return next();
     }
 
-    const userId = req.user?.id || req.user?._id;
     if (!userId) {
       return res.status(401).json({
         success: false,
