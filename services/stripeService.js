@@ -75,12 +75,12 @@ function cancelUrl() {
 const BASE_PLAN_FEATURES = [
   {
     title: 'Wellness Notes',
-    subtitle: 'Generate comprehensive wellness reports with AI analysis',
+    subtitle: 'Generate comprehensive wellness reports with detailed analysis',
   },
   {
     title: 'Supplements Review',
     subtitle:
-      'Get AI-powered supplement analysis and personalized recommendations',
+      'Get supplement analysis and personalized recommendations',
   },
   {
     title: 'Exercise Plans',
@@ -90,7 +90,7 @@ const BASE_PLAN_FEATURES = [
 
 const ANNUAL_PLAN_FEATURE = {
   title: 'Daily insights',
-  subtitle: 'AI-compiled data summary with insights',
+  subtitle: 'Compiled data summary with insights',
 };
 
 const LITE_PLAN_FEATURES = [
@@ -161,7 +161,7 @@ function getPlanCatalog() {
       {
         id: 'calorie_scan',
         packageType: 'annual_lite',
-        title: 'Calorie scan & exercise plans',
+        title: 'Diet & exercise plans',
         description: '12 months · focused tools',
         storeProductId: litePriceId,
         storeProductIdAndroid: litePriceId,

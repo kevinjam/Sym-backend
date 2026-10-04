@@ -3,7 +3,6 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const { requireFeature } = require('../middleware/requirePremium');
 const {
   analyzeMeal,
   listHistory,
@@ -14,7 +13,9 @@ const {
   providerStatus,
 } = require('../controllers/calorieScanController');
 
-const guard = [authenticateToken, requireFeature('calorieScan')];
+// Calorie scan is free for every signed-in user (no subscription required).
+// Keep in sync with FeatureAccessPolicy.freeFeatures in the Flutter app.
+const guard = [authenticateToken];
 
 /**
  * @swagger
