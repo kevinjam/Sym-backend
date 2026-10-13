@@ -85,6 +85,25 @@ function formatStatus(doc, { forcePremium = false } = {}) {
     };
   }
 
+  // Admin-granted access: report it as premium without touching Stripe fields.
+  const comp = doc.complimentary;
+  const compActive =
+    comp?.active === true && (!comp.expiresAt || new Date(comp.expiresAt).getTime() > Date.now());
+  if (compActive && !doc.hasPremium) {
+    return {
+      hasPremium: true,
+      isOnTrial: false,
+      entitlementId: stripeService.getEntitlementId(),
+      productIdentifier: 'sym_complimentary',
+      expirationDate: comp.expiresAt ? new Date(comp.expiresAt).toISOString() : null,
+      willRenew: false,
+      cancelAtPeriodEnd: false,
+      status: 'active',
+      managementUrl: null,
+      lastSyncedAt: doc.lastSyncedAt ? doc.lastSyncedAt.toISOString() : null,
+    };
+  }
+
   const willRenew = Boolean(doc.willRenew);
   return {
     hasPremium: doc.hasPremium,

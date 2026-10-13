@@ -49,7 +49,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['patient', 'doctor'],
+    enum: ['patient', 'doctor', 'admin'],
     required: true
   },
   firstName: {
@@ -96,6 +96,14 @@ const userSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  /**
+   * Can create / edit / delete other users from the admin console.
+   * Never settable from public endpoints: only scripts/create-admin.js sets it.
+   */
+  isSuperAdmin: {
+    type: Boolean,
+    default: false
   },
   lastLogin: Date,
   fcmToken: String, // For push notifications

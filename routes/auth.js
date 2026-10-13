@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const RefreshToken = require('../models/RefreshToken');
+const User = require('../models/User');
 const AuthController = require('../controllers/authController');
 const { authenticateToken } = require('../middleware/auth');
 const { validate, authSchemas } = require('../middleware/validation');
@@ -94,6 +95,14 @@ router.post(['/refresh-token', '/refresh'], async (req, res) => {
       return res.status(401).json({ error: 'Refresh token is no longer valid' });
     }
 
+    // The refresh token only carries the user id, so the role has to come from
+    // the account itself. (Falling back to "patient" demoted doctors and admins
+    // after their first refresh.) This also rejects deactivated accounts.
+    const account = await User.findById(String(userId)).select('role email isActive');
+    if (!account || account.isActive === false) {
+      return res.status(401).json({ error: 'Account is no longer active' });
+    }
+
     // Rotate refresh token and invalidate old one to prevent reuse.
     const newRefreshToken = signRefreshToken({ userId });
     const newHash = tokenHash(newRefreshToken);
@@ -113,9 +122,8 @@ router.post(['/refresh-token', '/refresh'], async (req, res) => {
 
     const accessToken = signAccessToken({
       userId: String(userId),
-      role: payload.role || 'patient',
-      email: payload.email,
-      conditions: payload.conditions || [],
+      role: account.role || 'patient',
+      email: account.email,
     });
 
     return res.status(200).json({

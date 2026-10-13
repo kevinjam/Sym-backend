@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateToken, requireDoctor } = require('../middleware/auth');
+const { authenticateToken, requireRole } = require('../middleware/auth');
 const CategoryController = require('../controllers/categoryController');
 
 const router = express.Router();
@@ -36,7 +36,7 @@ router.get('/:id', CategoryController.getCategory);
 
 // Admin-only routes (require authentication)
 router.use(authenticateToken);
-router.use(requireDoctor);
+router.use(requireRole(['admin']));
 
 /**
  * @swagger

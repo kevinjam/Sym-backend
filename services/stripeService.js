@@ -919,8 +919,18 @@ function mapSubscriptionToStatus(subscription) {
   }
 
   const status = subscription.status; // trialing, active, past_due, canceled, unpaid, …
-  const isOnTrial = status === 'trialing';
-  const hasPremium = status === 'active' || status === 'trialing';
+  // A trial is created as `trialing` *before* the user finishes Apple Pay /
+  // PaymentSheet. While its SetupIntent is still pending and no payment method
+  // is saved, the user has not actually started the trial — granting premium now
+  // would give 14 days free with nothing to charge afterwards. This is the exact
+  // signature of an abandoned checkout, so it is the only case we withhold.
+  const awaitingPaymentSetup =
+    status === 'trialing' &&
+    Boolean(subscription.pending_setup_intent) &&
+    !subscriptionHasPaymentMethod(subscription);
+  const isOnTrial = status === 'trialing' && !awaitingPaymentSetup;
+  const hasPremium =
+    !awaitingPaymentSetup && (status === 'active' || status === 'trialing');
   const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
   // Stripe API 2025+ moved period bounds onto subscription items.
   const item = subscription.items?.data?.[0];
@@ -937,7 +947,8 @@ function mapSubscriptionToStatus(subscription) {
   const priceId = priceIdFromSubscriptionItem(item);
 
   let mappedStatus = 'free';
-  if (isOnTrial) mappedStatus = 'trial';
+  if (awaitingPaymentSetup) mappedStatus = 'free';
+  else if (isOnTrial) mappedStatus = 'trial';
   else if (status === 'active' && cancelAtPeriodEnd) mappedStatus = 'cancelling';
   else if (status === 'active') mappedStatus = 'active';
   else if (status === 'canceled' || status === 'unpaid') {
