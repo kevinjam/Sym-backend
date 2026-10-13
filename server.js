@@ -76,26 +76,10 @@ app.set('trust proxy', 1);
 // Middleware
 app.use(helmet());
 // CORS configuration
+const { getAllowedOrigins } = require('./config/corsOrigins');
+
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production'
-    ? process.env.CORS_ORIGIN?.split(',') || [
-        'https://www.symhealth-ai.com',
-        'https://symhealth-ai.com',
-        'http://www.symhealth-ai.com',
-        'http://symhealth-ai.com',
-        'http://api.symhealth-ai.com',
-        'https://api.symhealth-ai.com',
-      ]
-    : process.env.CORS_ORIGIN?.split(',') || [
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:5173',
-        'http://localhost:8080',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:3001',
-        'http://127.0.0.1:5173',
-        'http://127.0.0.1:8080',
-      ],
+  origin: getAllowedOrigins(),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
