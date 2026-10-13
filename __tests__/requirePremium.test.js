@@ -1,9 +1,13 @@
 'use strict';
 
 jest.mock('../models/UserSubscription', () => ({ findOne: jest.fn() }));
+jest.mock('../services/appConfigService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue({ enabled: true, message: '' }),
+}));
+const appConfig = require('../services/appConfigService');
 
 const UserSubscription = require('../models/UserSubscription');
-const { requireFeature } = require('../middleware/requirePremium');
+const { requireFeature, requireFeatureEnabled } = require('../middleware/requirePremium');
 
 function run(feature, user = { id: 'u1' }) {
   const req = { user };
@@ -24,6 +28,7 @@ describe('requirePremium hardening', () => {
   const env = { ...process.env };
   beforeEach(() => {
     jest.resetAllMocks();
+    appConfig.isFeatureEnabled.mockResolvedValue({ enabled: true, message: '' });
     process.env = { ...env };
     delete process.env.SUBSCRIPTION_FORCE_PREMIUM;
   });
@@ -90,6 +95,50 @@ describe('requirePremium hardening', () => {
     UserSubscription.findOne.mockResolvedValue(null);
     const { res, next } = await run('aiChat', { id: 'someone-else' });
     expect(res.statusCode).toBe(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('active complimentary access unlocks a user with no paid plan', async () => {
+    UserSubscription.findOne.mockResolvedValue({
+      hasPremium: false,
+      complimentary: { active: true, expiresAt: future() },
+    });
+    const { next, req } = await run('aiChat');
+    expect(next).toHaveBeenCalled();
+    expect(req.subscription.complimentary).toBe(true);
+  });
+
+  test('complimentary access with no expiry stays active', async () => {
+    UserSubscription.findOne.mockResolvedValue({ complimentary: { active: true } });
+    const { next } = await run('aiChat');
+    expect(next).toHaveBeenCalled();
+  });
+
+  test('expired or revoked complimentary access is denied', async () => {
+    UserSubscription.findOne.mockResolvedValue({ complimentary: { active: true, expiresAt: past() } });
+    expect((await run('aiChat')).res.statusCode).toBe(403);
+    UserSubscription.findOne.mockResolvedValue({ complimentary: { active: false } });
+    expect((await run('aiChat')).res.statusCode).toBe(403);
+  });
+
+  test('admin kill switch blocks even a paying user', async () => {
+    appConfig.isFeatureEnabled.mockResolvedValue({ enabled: false, message: 'Back soon' });
+    UserSubscription.findOne.mockResolvedValue({
+      hasPremium: true, expirationDate: future(), productIdentifier: 'price_annual',
+    });
+    const { res, next } = await run('aiChat');
+    expect(res.statusCode).toBe(503);
+    expect(res.body.code).toBe('FEATURE_DISABLED');
+    expect(res.body.error).toBe('Back soon');
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('free features can be switched off too', async () => {
+    appConfig.isFeatureEnabled.mockResolvedValue({ enabled: false, message: '' });
+    const res = { statusCode: 200, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+    const next = jest.fn();
+    await requireFeatureEnabled('calorieScan')({}, res, next);
+    expect(res.statusCode).toBe(503);
     expect(next).not.toHaveBeenCalled();
   });
 });

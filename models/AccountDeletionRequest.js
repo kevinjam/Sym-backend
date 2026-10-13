@@ -24,7 +24,7 @@ const accountDeletionRequestSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['patient', 'doctor'],
+      enum: ['patient', 'doctor', 'admin'],
     },
     status: {
       type: String,

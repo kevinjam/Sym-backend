@@ -140,6 +140,10 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
+// Operational switches from the admin console: maintenance mode and per-feature
+// off-switches. Fails open (see services/appConfigService).
+app.use(require('./middleware/maintenance').maintenanceGate);
+
 
 // Swagger Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
@@ -155,6 +159,13 @@ app.get('/api/public/health', (req, res) => {
     environment: process.env.NODE_ENV,
     message: 'SYM API is running'
   });
+});
+
+// Lets clients read the current operational state (maintenance / disabled features).
+app.get('/api/public/app-config', async (req, res) => {
+  const cfg = await require('./services/appConfigService').getConfig();
+  res.set('Cache-Control', 'public, max-age=15');
+  res.json({ success: true, data: { maintenance: cfg.maintenance, features: cfg.features } });
 });
 
 app.get('/api/public/version', (req, res) => {
@@ -210,6 +221,7 @@ app.use('/api/fitness', fitnessRoutes);
 app.use('/api/widgets', widgetsRoutes);
 app.use('/api/thesis', thesisChatRoutes);
 app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/admin', require('./routes/admin'));
 app.use('/api/audio', audioRoutes);
 app.use('/api/supplements', supplementOptimizerRoutes);
 

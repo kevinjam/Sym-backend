@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { requireFeatureEnabled } = require('../middleware/requirePremium');
 const { requireFeature } = require('../middleware/requirePremium');
 const {
   analyzeMeal,

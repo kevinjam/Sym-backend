@@ -104,6 +104,10 @@ class AuthController {
         ...otherFields
       });
 
+      // Public signup can never grant privileged flags, whatever the body says.
+      user.isSuperAdmin = false;
+      user.isActive = true;
+
       await user.save();
 
       const token = await issueTokenPair({

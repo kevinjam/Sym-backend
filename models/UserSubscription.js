@@ -43,6 +43,17 @@ const userSubscriptionSchema = new mongoose.Schema(
     },
     managementUrl: { type: String, default: null },
     lastSyncedAt: { type: Date, default: null },
+    /**
+     * Admin-granted free premium. Kept separate from the Stripe fields so a
+     * Stripe sync can never overwrite it.
+     */
+    complimentary: {
+      active: { type: Boolean, default: false },
+      reason: { type: String, default: '' },
+      grantedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      grantedAt: { type: Date, default: null },
+      expiresAt: { type: Date, default: null },
+    },
     rawPayload: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true }

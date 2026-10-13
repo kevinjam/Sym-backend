@@ -7,6 +7,7 @@
  * Optional: req.requiredFeatures = ['calorieScan'] for lite-plan checks later.
  */
 const UserSubscription = require('../models/UserSubscription');
+const appConfig = require('../services/appConfigService');
 
 function subscriptionLookupFilter(userId) {
   const id = String(userId);
@@ -60,6 +61,14 @@ function planAllowsFeature(doc, feature) {
   return true;
 }
 
+/** Admin-granted free premium (VIP, partners, App Review demo accounts). */
+function complimentaryActive(doc) {
+  const c = doc?.complimentary;
+  if (!c || c.active !== true) return false;
+  if (c.expiresAt && new Date(c.expiresAt).getTime() <= Date.now()) return false;
+  return true;
+}
+
 function entitlementStillValid(doc) {
   if (!doc || !doc.hasPremium) return false;
   if (!doc.expirationDate) return true;
@@ -84,7 +93,8 @@ async function requirePremium(req, res, next) {
     }
 
     const doc = await UserSubscription.findOne(subscriptionLookupFilter(userId));
-    if (!entitlementStillValid(doc)) {
+    const viaComplimentary = !entitlementStillValid(doc) && complimentaryActive(doc);
+    if (!entitlementStillValid(doc) && !viaComplimentary) {
       return res.status(403).json({
         success: false,
         error: 'Premium subscription required.',
@@ -93,7 +103,8 @@ async function requirePremium(req, res, next) {
       });
     }
 
-    if (!planAllowsFeature(doc, req.requiredFeature)) {
+    // Complimentary access unlocks every feature, whatever plan the user once had.
+    if (!viaComplimentary && !planAllowsFeature(doc, req.requiredFeature)) {
       return res.status(403).json({
         success: false,
         error: 'Your plan does not include this feature.',
@@ -104,6 +115,7 @@ async function requirePremium(req, res, next) {
 
     req.subscription = {
       hasPremium: true,
+      complimentary: viaComplimentary,
       status: doc.status,
       productIdentifier: doc.productIdentifier,
       isOnTrial: doc.isOnTrial,
@@ -124,16 +136,39 @@ async function requirePremium(req, res, next) {
 /**
  * Factory: requirePremium + attach a feature code for client routing.
  */
+function featureOffResponse(res, featureCode, flag) {
+  return res.status(503).json({
+    success: false,
+    code: 'FEATURE_DISABLED',
+    feature: featureCode,
+    error: flag.message || 'This feature is temporarily unavailable. Please try again later.',
+  });
+}
+
+/** Premium-gated route that an admin can also switch off. */
 function requireFeature(featureCode) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     req.requiredFeature = featureCode;
+    const flag = await appConfig.isFeatureEnabled(featureCode);
+    if (!flag.enabled) return featureOffResponse(res, featureCode, flag);
     return requirePremium(req, res, next);
+  };
+}
+
+/** Free route that an admin can still switch off (e.g. calorie scan). */
+function requireFeatureEnabled(featureCode) {
+  return async (req, res, next) => {
+    const flag = await appConfig.isFeatureEnabled(featureCode);
+    if (!flag.enabled) return featureOffResponse(res, featureCode, flag);
+    return next();
   };
 }
 
 module.exports = {
   requirePremium,
   requireFeature,
+  requireFeatureEnabled,
+  complimentaryActive,
   entitlementStillValid,
   planAllowsFeature,
   isForcePremium,

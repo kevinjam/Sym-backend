@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { scanPrescription, testPrescriptionScanner, upload } = require('../controllers/prescriptionScannerController');
 const { authenticateToken } = require('../middleware/auth');
+const { requireFeatureEnabled } = require('../middleware/requirePremium');
 
 /**
  * @swagger
@@ -14,6 +15,6 @@ const { authenticateToken } = require('../middleware/auth');
 router.get('/test', authenticateToken, testPrescriptionScanner);
 
 // Scan prescription endpoint
-router.post('/scan', authenticateToken, upload.single('image'), scanPrescription);
+router.post('/scan', authenticateToken, requireFeatureEnabled('prescriptionScan'), upload.single('image'), scanPrescription);
 
 module.exports = router;
