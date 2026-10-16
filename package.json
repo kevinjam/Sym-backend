@@ -30,8 +30,10 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "@aws-sdk/client-s3": "^3.1086.0",
     "@aws-sdk/s3-request-presigner": "^3.1086.0",
+    "@googleapis/androidpublisher": "^42.2.0",
     "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
     "cheerio": "^1.0.0-rc.12",
@@ -42,6 +44,7 @@
     "express": "^4.18.2",
     "express-rate-limit": "^6.10.0",
     "firebase-admin": "^11.10.1",
+    "google-auth-library": "^11.3.1",
     "helmet": "^7.0.0",
     "joi": "^17.9.2",
     "jsonwebtoken": "^9.0.2",

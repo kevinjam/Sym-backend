@@ -44,4 +44,10 @@ router.post(
 router.post('/sync', authenticateToken, syncSubscription);
 router.post('/restore', authenticateToken, restoreSubscription);
 
+// Apple App Store / Google Play billing (verification happens server-side).
+const storeBilling = require('../controllers/storeBillingController');
+router.post('/iap/verify', authenticateToken, storeBilling.verifyPurchase);
+router.post('/iap/apple', storeBilling.appleNotification);
+router.post('/iap/google', storeBilling.googleNotification);
+
 module.exports = router;

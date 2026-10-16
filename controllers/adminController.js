@@ -11,6 +11,8 @@
 
 const mongoose = require('mongoose');
 const User = require('../models/User');
+const storeProducts = require('../services/storeBilling/products');
+const { storeEntitlementActive, topLevelStatus } = require('../services/storeBilling/entitlement');
 const UserSubscription = require('../models/UserSubscription');
 const SupportMessage = require('../models/SupportMessage');
 const BugReport = require('../models/BugReport');
@@ -71,9 +73,12 @@ function displayToNumber(value, fallback) {
 /** Plan label + monthly revenue for a Stripe price id (from the same env as the paywall). */
 function planInfo(productIdentifier) {
   const id = String(productIdentifier || '');
-  const annual = process.env.STRIPE_PRICE_ANNUAL || '';
-  const monthly = process.env.STRIPE_PRICE_MONTHLY || '';
-  const lite = process.env.STRIPE_PRICE_LITE || '';
+  // Apple / Google product IDs resolve to the same plan as their Stripe price.
+  const storeType =
+    storeProducts.packageTypeForProduct('apple', id) || storeProducts.packageTypeForProduct('google', id);
+  const annual = storeType === 'annual' ? id : process.env.STRIPE_PRICE_ANNUAL || '';
+  const monthly = storeType === 'monthly' ? id : process.env.STRIPE_PRICE_MONTHLY || '';
+  const lite = storeType === 'annual_lite' ? id : process.env.STRIPE_PRICE_LITE || '';
   const annualPrice = displayToNumber(process.env.STRIPE_ANNUAL_PRICE_DISPLAY, 59.99);
   const monthlyPrice = displayToNumber(process.env.STRIPE_MONTHLY_PRICE_DISPLAY, 14.99);
   const litePrice = displayToNumber(process.env.STRIPE_LITE_PRICE_DISPLAY, 47.99);
@@ -266,7 +271,7 @@ async function attachSubscriptions(userIds) {
   const subs = await UserSubscription.find({
     $or: [{ appUserId: { $in: ids } }, { userId: { $in: ids.filter(isObjectId) } }],
   }).select(
-    'userId appUserId status hasPremium isOnTrial productIdentifier expirationDate willRenew stripeCustomerId'
+    'userId appUserId status hasPremium isOnTrial productIdentifier expirationDate willRenew stripeCustomerId storeSubscription'
   );
   const map = new Map();
   subs.forEach((s) => {
@@ -279,6 +284,23 @@ async function attachSubscriptions(userIds) {
 function subscriptionView(sub) {
   if (!sub) {
     return { plan: 'Free', status: 'free', hasPremium: false, isOnTrial: false, expiresAt: null };
+  }
+  // A verified Apple / Google subscription counts when Stripe has none.
+  const store = sub.storeSubscription;
+  if (!sub.hasPremium && storeEntitlementActive(store)) {
+    const storeInfo = planInfo(store.productId);
+    return {
+      plan: storeInfo.label,
+      status: topLevelStatus(store),
+      hasPremium: true,
+      isOnTrial: Boolean(store.isOnTrial),
+      willRenew: Boolean(store.autoRenew),
+      expiresAt: store.expiresAt || null,
+      price: storeInfo.price,
+      cycle: storeInfo.cycle,
+      stripeCustomerId: sub.stripeCustomerId || null,
+      store: store.provider,
+    };
   }
   const info = planInfo(sub.productIdentifier);
   return {
