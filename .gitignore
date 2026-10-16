@@ -136,3 +136,6 @@ firebase-debug.*.log
 .idea/
 *.swp
 *.swo 
+
+# Apple App Store Connect API / In-App Purchase private keys: never commit
+*.p8

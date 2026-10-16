@@ -129,6 +129,62 @@ describe('Apple root certificate location', () => {
   });
 });
 
+describe('Apple private key location', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const saved = { inline: process.env.APPLE_IAP_PRIVATE_KEY, file: process.env.APPLE_IAP_PRIVATE_KEY_PATH };
+  const PEM = '-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n';
+  let dir;
+  beforeEach(() => {
+    delete process.env.APPLE_IAP_PRIVATE_KEY;
+    delete process.env.APPLE_IAP_PRIVATE_KEY_PATH;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apple-key-'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (saved.inline === undefined) delete process.env.APPLE_IAP_PRIVATE_KEY; else process.env.APPLE_IAP_PRIVATE_KEY = saved.inline;
+    if (saved.file === undefined) delete process.env.APPLE_IAP_PRIVATE_KEY_PATH; else process.env.APPLE_IAP_PRIVATE_KEY_PATH = saved.file;
+  });
+
+  test('reads the key from an absolute path', () => {
+    const file = path.join(dir, 'SubscriptionKey_TEST123456.p8');
+    fs.writeFileSync(file, PEM);
+    process.env.APPLE_IAP_PRIVATE_KEY_PATH = file;
+    expect(realApple.readPrivateKey()).toBe(PEM);
+  });
+  test('a relative path resolves from the backend root, not the working directory', () => {
+    const rel = path.join('certs', 'apple', 'zz-test-key.p8');
+    const abs = path.resolve(__dirname, '..', rel);
+    fs.writeFileSync(abs, PEM);
+    try {
+      process.env.APPLE_IAP_PRIVATE_KEY_PATH = rel;
+      expect(realApple.readPrivateKey()).toBe(PEM);
+    } finally {
+      fs.rmSync(abs, { force: true });
+    }
+  });
+  test('an inline key (newlines escaped as \\n) wins over a path', () => {
+    process.env.APPLE_IAP_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\\nABC\\n-----END PRIVATE KEY-----';
+    process.env.APPLE_IAP_PRIVATE_KEY_PATH = path.join(dir, 'missing.p8');
+    expect(realApple.readPrivateKey()).toBe(PEM.trim());
+  });
+  test('a missing file gives an empty key (billing reports not configured)', () => {
+    process.env.APPLE_IAP_PRIVATE_KEY_PATH = path.join(dir, 'missing.p8');
+    expect(realApple.readPrivateKey()).toBe('');
+  });
+  test('a .p8 sitting in the certs folder is never mistaken for a root certificate', () => {
+    fs.writeFileSync(path.join(dir, 'SubscriptionKey_TEST123456.p8'), PEM);
+    fs.writeFileSync(path.join(dir, 'AppleRootCA-G3.cer'), 'x');
+    process.env.APPLE_ROOT_CERTS_DIR = dir;
+    try {
+      expect(realApple.readRootCertificates()).toHaveLength(1);
+    } finally {
+      delete process.env.APPLE_ROOT_CERTS_DIR;
+    }
+  });
+});
+
 describe('Apple state normalization', () => {
   const { Status } = require('@apple/app-store-server-library');
   const tx = (o = {}) => ({ productId: 'sym.annual', originalTransactionId: '1', transactionId: '2', expiresDate: future().getTime(), ...o });
