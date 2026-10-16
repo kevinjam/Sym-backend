@@ -9,7 +9,7 @@
  *   APPLE_IAP_KEY_ID           In-App Purchase key ID
  *   APPLE_IAP_ISSUER_ID        Issuer ID
  *   APPLE_IAP_PRIVATE_KEY      contents of the .p8 (\n escaped) — or —
- *   APPLE_IAP_PRIVATE_KEY_PATH path to the .p8
+ *   APPLE_IAP_PRIVATE_KEY_PATH path to the .p8 (absolute, or relative to the backend root)
  *   APPLE_ROOT_CERTS_DIR       optional; folder with Apple's root CA certificates (.cer / .pem).
  *                              Relative paths resolve from the backend root; default certs/apple
  *
@@ -29,6 +29,7 @@ const {
   VerificationStatus,
 } = require('@apple/app-store-server-library');
 
+const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 const GRACE_CAP_DAYS = 16; // Apple's maximum billing grace period
 const DAY = 864e5;
 
@@ -36,15 +37,22 @@ function bundleId() {
   return String(process.env.APPLE_BUNDLE_ID || 'com.thinkdevs.sym').trim();
 }
 
+let warnedMissingKey = false;
+
 function readPrivateKey() {
   const inline = String(process.env.APPLE_IAP_PRIVATE_KEY || '').trim();
   if (inline) return inline.replace(/\\n/g, '\n');
-  const file = String(process.env.APPLE_IAP_PRIVATE_KEY_PATH || '').trim();
-  if (file && fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+  const configured = String(process.env.APPLE_IAP_PRIVATE_KEY_PATH || '').trim();
+  if (!configured) return '';
+  // Relative paths resolve from the backend root, like the certificates folder.
+  const file = path.resolve(BACKEND_ROOT, configured);
+  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+  if (!warnedMissingKey) {
+    warnedMissingKey = true;
+    console.warn(`[appStore] APPLE_IAP_PRIVATE_KEY_PATH is set but no file exists at ${file}`);
+  }
   return '';
 }
-
-const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
 /** Where Apple's root certificates live. Defaults to <backend>/certs/apple. */
 function rootCertsDir() {
@@ -211,6 +219,7 @@ async function decodeTransaction(signedTransactionInfo) {
 
 module.exports = {
   rootCertsDir,
+  readPrivateKey,
   readRootCertificates,
   isConfigured,
   getSubscriptionState,
