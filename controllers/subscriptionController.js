@@ -4,6 +4,9 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const UserSubscription = require('../models/UserSubscription');
 const stripeService = require('../services/stripeService');
+const storeProducts = require('../services/storeBilling/products');
+const storeBilling = require('../services/storeBilling/storeBillingService');
+const { MANAGE_URL, storeEntitlementActive, topLevelStatus } = require('../services/storeBilling/entitlement');
 
 function isValidObjectId(value) {
   if (!value) return false;
@@ -104,6 +107,24 @@ function formatStatus(doc, { forcePremium = false } = {}) {
     };
   }
 
+  // Apple / Google subscription (verified server-side). Stripe wins if both exist.
+  const sub = doc.storeSubscription;
+  if (storeEntitlementActive(sub) && !doc.hasPremium) {
+    return {
+      hasPremium: true,
+      isOnTrial: Boolean(sub.isOnTrial),
+      entitlementId: stripeService.getEntitlementId(),
+      productIdentifier: sub.productId,
+      expirationDate: sub.expiresAt ? new Date(sub.expiresAt).toISOString() : null,
+      willRenew: Boolean(sub.autoRenew),
+      cancelAtPeriodEnd: !sub.autoRenew,
+      status: topLevelStatus(sub),
+      managementUrl: MANAGE_URL[sub.provider] || null,
+      lastSyncedAt: sub.lastVerifiedAt ? new Date(sub.lastVerifiedAt).toISOString() : null,
+      store: sub.provider,
+    };
+  }
+
   const willRenew = Boolean(doc.willRenew);
   return {
     hasPremium: doc.hasPremium,
@@ -116,6 +137,7 @@ function formatStatus(doc, { forcePremium = false } = {}) {
     status: doc.status,
     managementUrl: doc.managementUrl,
     lastSyncedAt: doc.lastSyncedAt ? doc.lastSyncedAt.toISOString() : null,
+    store: doc.hasPremium ? 'stripe' : null,
   };
 }
 
@@ -257,6 +279,11 @@ async function getStatus(req, res) {
 
     let doc = await UserSubscription.findOne(subscriptionLookupFilter(userId));
 
+    // Apple / Google: re-check with the store when expired or stale (fail-soft).
+    if (doc?.storeSubscription?.provider) {
+      doc = await storeBilling.refreshIfStale(doc);
+    }
+
     if (stripeService.isConfigured() && doc?.stripeCustomerId) {
       try {
         doc = await syncFromStripeCustomer(userId, doc.stripeCustomerId);
@@ -290,7 +317,7 @@ async function getStatus(req, res) {
  */
 async function getPlans(req, res) {
   try {
-    const catalog = stripeService.getPlanCatalog();
+    const catalog = storeProducts.applyStoreIdsToCatalog(stripeService.getPlanCatalog());
     return res.json({
       success: true,
       data: catalog,

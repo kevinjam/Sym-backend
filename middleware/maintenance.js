@@ -9,6 +9,8 @@ const ALWAYS_OPEN = [
   '/api/auth',
   '/api/admin',
   '/api/subscription/webhook',
+  '/api/subscription/iap/apple',
+  '/api/subscription/iap/google',
   '/api/subscription/store-config',
 ];
 
