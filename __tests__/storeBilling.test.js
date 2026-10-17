@@ -169,6 +169,27 @@ describe('Apple private key location', () => {
     process.env.APPLE_IAP_PRIVATE_KEY_PATH = path.join(dir, 'missing.p8');
     expect(realApple.readPrivateKey()).toBe(PEM.trim());
   });
+  test('an unreadable file does not throw: billing reports not configured and logs why', () => {
+    const file = path.join(dir, 'locked.p8');
+    fs.writeFileSync(file, PEM);
+    process.env.APPLE_IAP_PRIVATE_KEY_PATH = file;
+    const spy = jest.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      jest.isolateModules(() => {
+        const fresh = jest.requireActual('../services/storeBilling/appleService');
+        expect(() => fresh.readPrivateKey()).not.toThrow();
+        expect(fresh.readPrivateKey()).toBe('');
+        expect(fresh.isConfigured()).toBe(false);
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot read it'));
+    } finally {
+      spy.mockRestore();
+      warn.mockRestore();
+    }
+  });
   test('a missing file gives an empty key (billing reports not configured)', () => {
     process.env.APPLE_IAP_PRIVATE_KEY_PATH = path.join(dir, 'missing.p8');
     expect(realApple.readPrivateKey()).toBe('');

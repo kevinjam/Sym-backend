@@ -358,7 +358,13 @@ async function saveInsight(req, res) {
   }
 }
 
-const TESTIMONIAL_KEY = 'feature_testimonial';
+const {
+  COPY_KEY,
+  buildOnboardingCopyPayload,
+  parseGoalTilesForSave,
+  parsePrimaryGoalOptionsForSave,
+  TESTIMONIAL_KEY,
+} = require('./onboardingContentController');
 
 async function getTestimonial(req, res) {
   try {
@@ -402,6 +408,60 @@ async function saveTestimonial(req, res) {
   } catch (err) {
     console.error('[adminOps] saveTestimonial failed:', err);
     return fail(res, 500, 'Failed to save testimonial');
+  }
+}
+
+async function getOnboardingCopy(req, res) {
+  try {
+    const doc = await OnboardingContent.findOne({ key: COPY_KEY }).lean();
+    const payload = buildOnboardingCopyPayload(doc);
+    return ok(res, {
+      ...payload,
+      active: doc ? doc.active !== false : true,
+      exists: Boolean(doc),
+    });
+  } catch (err) {
+    console.error('[adminOps] getOnboardingCopy failed:', err);
+    return fail(res, 500, 'Failed to load onboarding copy');
+  }
+}
+
+async function saveOnboardingCopy(req, res) {
+  try {
+    const b = req.body || {};
+    const goalTiles = parseGoalTilesForSave(b.goalTiles);
+    const primaryGoalOptions = parsePrimaryGoalOptionsForSave(b.primaryGoalOptions);
+    const data = {
+      goalsTitle: str(b.goalsTitle, 160),
+      goalsSubtitle: str(b.goalsSubtitle, 200),
+      primaryGoalTitle: str(b.primaryGoalTitle, 200),
+      goalTiles,
+      primaryGoalOptions,
+      active: b.active !== false,
+    };
+    if (
+      !data.goalsTitle ||
+      !data.goalsSubtitle ||
+      !data.primaryGoalTitle ||
+      !goalTiles ||
+      !primaryGoalOptions
+    ) {
+      return fail(
+        res,
+        400,
+        'Titles, at least one goal tile, and at least one primary option are required',
+      );
+    }
+    await OnboardingContent.findOneAndUpdate(
+      { key: COPY_KEY },
+      { $set: data, $setOnInsert: { key: COPY_KEY } },
+      { upsert: true, new: true, runValidators: true },
+    );
+    await audit(req, 'onboarding_copy.update', 'onboarding_content', COPY_KEY);
+    return ok(res, { saved: true });
+  } catch (err) {
+    console.error('[adminOps] saveOnboardingCopy failed:', err);
+    return fail(res, 500, 'Failed to save onboarding copy');
   }
 }
 
@@ -600,6 +660,8 @@ module.exports = {
   saveInsight,
   getTestimonial,
   saveTestimonial,
+  getOnboardingCopy,
+  saveOnboardingCopy,
   listBooks,
   saveBook,
   deleteBook,

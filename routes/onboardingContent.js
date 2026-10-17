@@ -4,5 +4,6 @@ const onboardingContentController = require('../controllers/onboardingContentCon
 const router = express.Router();
 
 router.get('/testimonial', onboardingContentController.getTestimonial);
+router.get('/copy', onboardingContentController.getCopy);
 
 module.exports = router;

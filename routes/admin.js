@@ -56,6 +56,9 @@ router.put('/insights/:id', requireSuperAdmin, ops.saveInsight);
 router.get('/content/testimonial', ops.getTestimonial);
 router.put('/content/testimonial', requireSuperAdmin, ops.saveTestimonial);
 
+router.get('/content/onboarding-copy', ops.getOnboardingCopy);
+router.put('/content/onboarding-copy', requireSuperAdmin, ops.saveOnboardingCopy);
+
 router.get('/books', ops.listBooks);
 router.post('/books', requireSuperAdmin, ops.saveBook);
 router.put('/books/:id', requireSuperAdmin, ops.saveBook);
