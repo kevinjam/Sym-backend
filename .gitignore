@@ -139,3 +139,6 @@ firebase-debug.*.log
 
 # Apple App Store Connect API / In-App Purchase private keys: never commit
 *.p8
+
+# Output of scripts/preview-email.js
+email-preview-*.html

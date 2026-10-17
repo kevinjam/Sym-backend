@@ -167,6 +167,8 @@ app.use('/api/public/daily-insights', dailyInsightRoutes);
 
 // Protected routes (authentication required)
 app.use('/api/auth', authRoutes);
+// Public unsubscribe pages for optional emails (signed links, no login).
+app.use('/api/email', require('./routes/email'));
 app.use('/api/users', userRoutes);
 app.use('/api/patient', patientRoutes);
 app.use('/api/dashboard', dashboardRoutes);
@@ -300,6 +302,9 @@ async function startServer() {
 
     // Medication reminder cron must run only after DB is ready (bufferCommands is false).
     schedulerService.start();
+
+    // Onboarding / win-back / trial-ending emails. Off unless LIFECYCLE_EMAILS_ENABLED=true.
+    require('./services/email/lifecycleScheduler').start();
 
     const PORT = process.env.PORT || 9000;
     server.listen(PORT, () => {

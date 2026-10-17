@@ -9,6 +9,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const UserSubscription = require('../models/UserSubscription');
 const NotificationCampaign = require('../models/NotificationCampaign');
+const RefreshToken = require('../models/RefreshToken');
 const { firebaseApp } = require('../config/firebase');
 
 const BATCH = 500; // FCM multicast limit
@@ -28,7 +29,18 @@ const isConfigured = () => Boolean(firebaseApp);
 
 const toObjectIds = (ids) => ids.filter((i) => /^[a-fA-F0-9]{24}$/.test(String(i))).map((i) => new mongoose.Types.ObjectId(String(i)));
 
-async function subscriberIds(match) {
+/**
+ * Ids of users with an active subscription, whichever way they pay: Stripe
+ * (legacy) or a verified Apple / Google subscription.
+ * @param {'premium'|'trial'} kind
+ */
+async function subscriberIds(kind) {
+  const now = new Date();
+  const storeActive = { 'storeSubscription.isActive': true, 'storeSubscription.expiresAt': { $gt: now } };
+  const match =
+    kind === 'trial'
+      ? { $or: [{ hasPremium: true, isOnTrial: true }, { ...storeActive, 'storeSubscription.isOnTrial': true }] }
+      : { $or: [{ hasPremium: true }, storeActive] };
   const rows = await UserSubscription.find(match).select('appUserId').lean();
   return toObjectIds(rows.map((r) => r.appUserId));
 }
@@ -42,14 +54,21 @@ async function audienceFilter(segment) {
     case 'doctors':
       return { ...base, role: 'doctor' };
     case 'premium':
-      return { ...base, _id: { $in: await subscriberIds({ hasPremium: true }) } };
+      return { ...base, _id: { $in: await subscriberIds('premium') } };
     case 'trial':
-      return { ...base, _id: { $in: await subscriberIds({ hasPremium: true, isOnTrial: true }) } };
+      return { ...base, _id: { $in: await subscriberIds('trial') } };
     case 'free':
-      return { ...base, _id: { $nin: await subscriberIds({ hasPremium: true }) } };
+      return { ...base, _id: { $nin: await subscriberIds('premium') } };
     case 'inactive30': {
       const cutoff = new Date(Date.now() - 30 * DAY);
-      return { ...base, $or: [{ lastLogin: { $lt: cutoff } }, { lastLogin: null }, { lastLogin: { $exists: false } }] };
+      // lastLogin only changes on an explicit sign-in, but sessions last 30 days and
+      // refresh silently. Anyone whose session refreshed recently is clearly active.
+      const recentlyActive = toObjectIds(await RefreshToken.distinct('userId', { createdAt: { $gte: cutoff } }));
+      return {
+        ...base,
+        ...(recentlyActive.length ? { _id: { $nin: recentlyActive } } : {}),
+        $or: [{ lastLogin: { $lt: cutoff } }, { lastLogin: null }, { lastLogin: { $exists: false } }],
+      };
     }
     default:
       return base;

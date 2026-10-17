@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const RefreshToken = require('../models/RefreshToken');
 const User = require('../models/User');
@@ -12,12 +13,36 @@ const {
   accessExpiresInSeconds,
 } = require('../utils/tokenService');
 const { profilePictureUpload } = require('../middleware/profilePictureUpload');
+const passwordReset = require('../controllers/passwordResetController');
 
 const router = express.Router();
+
+// Behind Cloudflare the socket address is the edge, so prefer the real client IP.
+const resetLimiter = (max, windowMs) =>
+  rateLimit({
+    windowMs,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => String(req.headers['cf-connecting-ip'] || req.ip),
+    message: { success: false, error: 'Too many attempts. Please try again later.' },
+  });
 
 // Core auth endpoints used by Flutter app
 router.post('/register', validate(authSchemas.register), AuthController.register);
 router.post('/login', validate(authSchemas.login), AuthController.login);
+router.post(
+  '/forgot-password',
+  resetLimiter(10, 60 * 60 * 1000),
+  validate(authSchemas.forgotPassword),
+  passwordReset.forgotPassword
+);
+router.post(
+  '/reset-password',
+  resetLimiter(20, 15 * 60 * 1000),
+  validate(authSchemas.resetPassword),
+  passwordReset.reset
+);
 router.post('/google', validate(authSchemas.googleAuth), AuthController.googleAuth);
 router.post(
   '/verify-google-token',
