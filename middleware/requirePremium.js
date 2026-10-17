@@ -48,7 +48,7 @@ function isForcePremiumForUser(userId) {
 }
 
 // Mirrors the client FeatureAccessPolicy: the lite plan only unlocks these.
-const LITE_FEATURES = new Set(['calorieScan', 'exercisePlans']);
+const LITE_FEATURES = new Set(['calorieScan', 'aiDiet', 'exercisePlans']);
 
 function isLitePlan(doc) {
   const product = String(doc?.productIdentifier || '').toLowerCase();
