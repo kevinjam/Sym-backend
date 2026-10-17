@@ -206,12 +206,27 @@ async function overview(req, res) {
           },
         },
       ]),
-      UserSubscription.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
-      UserSubscription.countDocuments({ hasPremium: true }),
-      UserSubscription.countDocuments({ hasPremium: true, isOnTrial: true }),
       UserSubscription.aggregate([
-        { $match: { hasPremium: true, isOnTrial: false } },
-        { $group: { _id: '$productIdentifier', count: { $sum: 1 } } },
+        { $addFields: { effectiveStatus: effectiveStatusExpr(new Date()) } },
+        { $group: { _id: '$effectiveStatus', count: { $sum: 1 } } },
+      ]),
+      UserSubscription.countDocuments(subscriptionStatusFilter('premium')),
+      UserSubscription.countDocuments(subscriptionStatusFilter('trial')),
+      UserSubscription.aggregate([
+        {
+          $match: {
+            $or: [
+              { hasPremium: true, isOnTrial: false },
+              storeOnly(new Date(), { $nor: STORE_TRIAL }),
+            ],
+          },
+        },
+        {
+          $group: {
+            _id: { $cond: [{ $eq: ['$hasPremium', true] }, '$productIdentifier', '$storeSubscription.productId'] },
+            count: { $sum: 1 },
+          },
+        },
       ]),
       SupportMessage.countDocuments({ status: { $in: ['open', 'in_progress'] } }),
       BugReport.countDocuments({ status: { $in: ['open', 'in_progress'] } }),
@@ -219,12 +234,18 @@ async function overview(req, res) {
     ]);
 
     let mrr = 0;
-    const plans = payingByProduct.map((row) => {
+    // Stripe and Apple/Google products share plan labels: merge them into one row.
+    const planRows = new Map();
+    payingByProduct.forEach((row) => {
       const info = planInfo(row._id);
       const monthly = info.monthly * row.count;
       mrr += monthly;
-      return { plan: info.label, subscribers: row.count, mrr: Math.round(monthly * 100) / 100 };
+      const prev = planRows.get(info.label) || { plan: info.label, subscribers: 0, mrr: 0 };
+      prev.subscribers += row.count;
+      prev.mrr += monthly;
+      planRows.set(info.label, prev);
     });
+    const plans = [...planRows.values()].map((p) => ({ ...p, mrr: Math.round(p.mrr * 100) / 100 }));
 
     const signupMap = new Map(signupRows.map((r) => [r._id, r.count]));
     const signupsByDay = lastNDays(30).map((date) => ({ date, count: signupMap.get(date) || 0 }));
@@ -263,6 +284,86 @@ async function overview(req, res) {
     console.error('[admin] overview failed:', err);
     return fail(res, 500, 'Failed to load overview');
   }
+}
+
+/**
+ * Mongo conditions for Apple / Google subscribers. A store subscription lives
+ * under `storeSubscription` and leaves the legacy top-level fields (Stripe) as
+ * "free", so every admin query that asks "who is subscribed" must look at both.
+ */
+function storeLiveCondition(now = new Date()) {
+  return {
+    $and: [
+      { 'storeSubscription.isActive': true },
+      { $or: [{ 'storeSubscription.expiresAt': null }, { 'storeSubscription.expiresAt': { $gt: now } }] },
+    ],
+  };
+}
+
+const STORE_TRIAL = [{ 'storeSubscription.state': 'trial' }, { 'storeSubscription.isOnTrial': true }];
+const STORE_CANCELLED = [{ 'storeSubscription.state': 'cancelled' }, { 'storeSubscription.autoRenew': false }];
+
+/** A live store subscription on an account Stripe does not already cover. */
+function storeOnly(now, ...extra) {
+  return { hasPremium: { $ne: true }, $and: [storeLiveCondition(now), ...extra] };
+}
+
+/** Filter for the Subscriptions tabs; mirrors subscriptionView()/topLevelStatus(). */
+function subscriptionStatusFilter(status, now = new Date()) {
+  switch (status) {
+    case 'premium':
+      return { $or: [{ hasPremium: true }, storeOnly(now)] };
+    case 'trial':
+      return { $or: [{ status: 'trial' }, storeOnly(now, { $or: STORE_TRIAL })] };
+    case 'cancelled':
+      return {
+        $or: [
+          { status: 'cancelled' },
+          storeOnly(now, { $nor: STORE_TRIAL }, { $or: STORE_CANCELLED }),
+        ],
+      };
+    case 'active':
+      return {
+        $or: [{ status: 'active' }, storeOnly(now, { $nor: [...STORE_TRIAL, ...STORE_CANCELLED] })],
+      };
+    case 'free':
+      return { status: 'free', $nor: [storeOnly(now)] };
+    case 'expired':
+      return { status: 'expired' };
+    default:
+      return {};
+  }
+}
+
+/** Aggregation twin of subscriptionView(): the status admins should see. */
+function effectiveStatusExpr(now) {
+  const eq = (path, v) => ({ $eq: [path, v] });
+  const live = {
+    $and: [
+      { $ne: ['$hasPremium', true] },
+      eq('$storeSubscription.isActive', true),
+      { $or: [eq({ $ifNull: ['$storeSubscription.expiresAt', null] }, null), { $gt: ['$storeSubscription.expiresAt', now] }] },
+    ],
+  };
+  return {
+    $cond: [
+      live,
+      {
+        $cond: [
+          { $or: [eq('$storeSubscription.state', 'trial'), eq('$storeSubscription.isOnTrial', true)] },
+          'trial',
+          {
+            $cond: [
+              { $or: [eq('$storeSubscription.state', 'cancelled'), eq('$storeSubscription.autoRenew', false)] },
+              'cancelled',
+              'active',
+            ],
+          },
+        ],
+      },
+      '$status',
+    ],
+  };
 }
 
 async function attachSubscriptions(userIds) {
@@ -460,18 +561,13 @@ async function setUserStatus(req, res) {
 async function listSubscriptions(req, res) {
   try {
     const { page, limit, skip } = parsePaging(req.query);
-    const filter = {};
     const status = String(req.query.status || '');
-    if (['free', 'trial', 'active', 'expired', 'cancelled'].includes(status)) {
-      filter.status = status;
-    } else if (status === 'premium') {
-      filter.hasPremium = true;
-    }
+    const filter = subscriptionStatusFilter(status);
 
     const [rows, total] = await Promise.all([
       UserSubscription.find(filter)
         .select(
-          'userId appUserId status hasPremium isOnTrial productIdentifier expirationDate willRenew stripeCustomerId stripeSubscriptionId lastSyncedAt updatedAt'
+          'userId appUserId status hasPremium isOnTrial productIdentifier expirationDate willRenew stripeCustomerId stripeSubscriptionId storeSubscription lastSyncedAt updatedAt'
         )
         .sort({ updatedAt: -1 })
         .skip(skip)
@@ -1281,6 +1377,8 @@ module.exports = {
   deleteUser,
   getUserBilling,
   listSubscriptions,
+  subscriptionView,
+  subscriptionStatusFilter,
   usage,
   listDeletionRequests,
   updateDeletionRequest,
