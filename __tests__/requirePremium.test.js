@@ -56,6 +56,18 @@ describe('requirePremium hardening', () => {
     expect(next).toHaveBeenCalled();
   });
 
+  test('"Diet & exercise plans" unlocks diet, workouts and calorie scan, and nothing else', async () => {
+    UserSubscription.findOne.mockResolvedValue({
+      hasPremium: true, expirationDate: future(), productIdentifier: 'price_lite_annual',
+    });
+    for (const feature of ['aiDiet', 'exercisePlans', 'calorieScan']) {
+      expect((await run(feature)).next).toHaveBeenCalled();
+    }
+    for (const feature of ['aiChat', 'aiMindfulness', 'wellnessNotes', 'supplementsReview']) {
+      expect((await run(feature)).res.statusCode).toBe(403);
+    }
+  });
+
   test('lite plan is denied AI chat but allowed calorie scan', async () => {
     const lite = { hasPremium: true, expirationDate: future(), productIdentifier: 'price_lite_annual' };
     UserSubscription.findOne.mockResolvedValue(lite);

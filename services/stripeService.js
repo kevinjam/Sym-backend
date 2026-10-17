@@ -99,6 +99,10 @@ const LITE_PLAN_FEATURES = [
     subtitle: 'Photo food recognition with nutrition data',
   },
   {
+    title: 'Meal Plans',
+    subtitle: 'Personalized recipes and meal plans for your goals',
+  },
+  {
     title: 'Exercise Plans',
     subtitle: 'Create custom workout routines tailored to your fitness goals',
   },
