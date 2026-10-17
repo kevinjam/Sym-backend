@@ -9,6 +9,7 @@ const RefreshToken = require('../models/RefreshToken');
 const AccountDeletionRequest = require('../models/AccountDeletionRequest');
 const { formatAuthUser } = require('../utils/formatAuthUser');
 const { issueTokenPair } = require('../utils/tokenService');
+const { queueWelcomeEmail } = require('../services/email/welcomeEmailService');
 const {
   uploadProfilePictureBuffer,
   deleteStoredProfilePicture,
@@ -121,6 +122,9 @@ class AuthController {
         token,
         user: formatAuthUser(user),
       });
+
+      // Background welcome email: never delays or fails the signup.
+      queueWelcomeEmail(user);
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).json({ error: 'Registration failed' });
@@ -703,6 +707,9 @@ class AuthController {
         },
         user: formatAuthUser(user),
       });
+
+      // Background welcome email: never delays or fails the signup.
+      queueWelcomeEmail(user);
 
     } catch (error) {
       console.error('Firebase authentication error:', error);

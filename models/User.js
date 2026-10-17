@@ -106,6 +106,13 @@ const userSchema = new mongoose.Schema({
     default: false
   },
   lastLogin: Date,
+  /** Set when the welcome email has been sent (or claimed); guarantees one per user. */
+  welcomeEmailSentAt: { type: Date, default: undefined },
+  /** Optional emails (tips, reminders to come back). Service emails always send. */
+  emailPreferences: {
+    marketing: { type: Boolean, default: true },
+    unsubscribedAt: { type: Date, default: undefined },
+  },
   fcmToken: String, // For push notifications
   hasAcceptedTerms: {
     type: Boolean,

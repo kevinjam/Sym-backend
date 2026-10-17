@@ -57,6 +57,18 @@ const authSchemas = {
     password: Joi.string().required()
   }),
 
+  forgotPassword: Joi.object({
+    email: Joi.string().email().max(254).required()
+  }),
+
+  resetPassword: Joi.object({
+    email: Joi.string().email().max(254).required(),
+    code: Joi.string().pattern(/^\d{6}$/).required().messages({
+      'string.pattern.base': 'Enter the 6-digit code from your email.'
+    }),
+    newPassword: Joi.string().min(8).max(128).required()
+  }),
+
   googleAuth: Joi.object({
     idToken: Joi.string().required(),
     role: Joi.string().valid('patient', 'doctor').required(),
