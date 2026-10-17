@@ -46,12 +46,22 @@ function readPrivateKey() {
   if (!configured) return '';
   // Relative paths resolve from the backend root, like the certificates folder.
   const file = path.resolve(BACKEND_ROOT, configured);
-  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
-  if (!warnedMissingKey) {
-    warnedMissingKey = true;
-    console.warn(`[appStore] APPLE_IAP_PRIVATE_KEY_PATH is set but no file exists at ${file}`);
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    // Never let a bad key file crash a request: report "not configured" and say why.
+    if (!warnedMissingKey) {
+      warnedMissingKey = true;
+      const hint =
+        err.code === 'EACCES'
+          ? 'the user running this process cannot read it (chown it to that user, chmod 600)'
+          : err.code === 'ENOENT'
+            ? 'no file exists there'
+            : err.message;
+      console.warn(`[appStore] Cannot read APPLE_IAP_PRIVATE_KEY_PATH (${file}): ${hint}`);
+    }
+    return '';
   }
-  return '';
 }
 
 /** Where Apple's root certificates live. Defaults to <backend>/certs/apple. */
