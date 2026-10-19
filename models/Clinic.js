@@ -20,6 +20,8 @@ const clinicSchema = new mongoose.Schema({
   openNow: { type: Boolean, default: true, index: true },
   offersReferrals: { type: Boolean, default: true, index: true },
   imageUrl: { type: String, trim: true },
+  /** Stable id from legacy app/scraper data — used for idempotent seeds. */
+  legacyId: { type: String, trim: true, sparse: true, unique: true },
 }, { timestamps: true });
 
 clinicSchema.index({ name: 'text', description: 'text', address: 'text' });
