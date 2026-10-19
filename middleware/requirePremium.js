@@ -55,7 +55,11 @@ function isLitePlan(doc) {
   const litePrice = String(process.env.STRIPE_PRICE_LITE || '').toLowerCase();
   if (litePrice && product === litePrice) return true;
   if (isLiteProduct(doc?.productIdentifier)) return true;
-  return product.includes('lite') || product.includes('calorie');
+  if (product.includes('annual_lite') || product.includes('_lite')) return true;
+  if (product.includes('dietexercise') || product.includes('calorie_scan')) {
+    return true;
+  }
+  return product.includes('lite');
 }
 
 function planAllowsFeature(doc, feature) {

@@ -57,6 +57,13 @@ function isForcePremiumEnabledFor(userId) {
   return forcePremiumUserIds().includes(String(userId));
 }
 
+function complimentaryActive(doc) {
+  const c = doc?.complimentary;
+  if (!c || c.active !== true) return false;
+  if (c.expiresAt && new Date(c.expiresAt).getTime() <= Date.now()) return false;
+  return true;
+}
+
 function formatStatus(doc, { forcePremium = false } = {}) {
   if (forcePremium) {
     return {
@@ -89,10 +96,8 @@ function formatStatus(doc, { forcePremium = false } = {}) {
   }
 
   // Admin-granted access: report it as premium without touching Stripe fields.
-  const comp = doc.complimentary;
-  const compActive =
-    comp?.active === true && (!comp.expiresAt || new Date(comp.expiresAt).getTime() > Date.now());
-  if (compActive && !doc.hasPremium) {
+  if (complimentaryActive(doc) && !doc.hasPremium) {
+    const comp = doc.complimentary;
     return {
       hasPremium: true,
       isOnTrial: false,
@@ -291,8 +296,12 @@ async function getStatus(req, res) {
         console.warn('[Subscription] Stripe sync failed, using cache:', syncErr.message);
       }
     } else if (doc?.hasPremium && !doc?.stripeCustomerId) {
-      // Ghost premium after sign-out / re-signup with no Stripe customer.
-      doc = null;
+      // Ghost Stripe premium after sign-out / re-signup — never wipe Apple/Google
+      // entitlements or admin complimentary access on the same row.
+      const storeActive = storeEntitlementActive(doc.storeSubscription);
+      if (!storeActive && !complimentaryActive(doc)) {
+        doc = null;
+      }
     }
 
     return res.json({
