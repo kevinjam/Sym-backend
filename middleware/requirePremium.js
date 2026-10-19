@@ -10,17 +10,7 @@ const UserSubscription = require('../models/UserSubscription');
 const appConfig = require('../services/appConfigService');
 const { storeEntitlementActive } = require('../services/storeBilling/entitlement');
 const { isLiteProduct } = require('../services/storeBilling/products');
-
-function subscriptionLookupFilter(userId) {
-  const id = String(userId);
-  const filter = {
-    $or: [{ appUserId: id }, { revenueCatAppUserId: id }],
-  };
-  if (/^[a-fA-F0-9]{24}$/.test(id)) {
-    filter.$or.push({ userId: id });
-  }
-  return filter;
-}
+const storeBilling = require('../services/storeBilling/storeBillingService');
 
 function forcePremiumUserIds() {
   return String(process.env.SUBSCRIPTION_FORCE_PREMIUM_USER_IDS || '')
@@ -82,6 +72,21 @@ function entitlementStillValid(doc) {
   return new Date(doc.expirationDate).getTime() > Date.now();
 }
 
+function hasAnyPremiumEntitlement(doc) {
+  if (!doc) return false;
+  if (complimentaryActive(doc)) return true;
+  if (storeEntitlementActive(doc.storeSubscription)) return true;
+  return entitlementStillValid(doc);
+}
+
+function planDocForFeatureCheck(doc, { viaStore, viaComplimentary }) {
+  if (viaComplimentary) return doc;
+  if (viaStore && doc?.storeSubscription?.productId) {
+    return { productIdentifier: doc.storeSubscription.productId };
+  }
+  return doc;
+}
+
 async function requirePremium(req, res, next) {
   try {
     const userId = req.user?.id || req.user?._id;
@@ -99,11 +104,18 @@ async function requirePremium(req, res, next) {
       });
     }
 
-    const doc = await UserSubscription.findOne(subscriptionLookupFilter(userId));
-    const stripeValid = entitlementStillValid(doc);
-    const viaComplimentary = !stripeValid && complimentaryActive(doc);
-    const viaStore = !stripeValid && !viaComplimentary && storeEntitlementActive(doc?.storeSubscription);
-    if (!stripeValid && !viaComplimentary && !viaStore) {
+    let doc = await UserSubscription.findOne(
+      storeBilling.subscriptionLookupFilter(userId),
+    );
+    if (doc?.storeSubscription?.provider) {
+      doc = await storeBilling.refreshIfStale(doc);
+    }
+
+    const viaComplimentary = complimentaryActive(doc);
+    const viaStore = storeEntitlementActive(doc?.storeSubscription);
+    const viaLegacyStripe = entitlementStillValid(doc);
+
+    if (!viaComplimentary && !viaStore && !viaLegacyStripe) {
       return res.status(403).json({
         success: false,
         error: 'Premium subscription required.',
@@ -112,8 +124,7 @@ async function requirePremium(req, res, next) {
       });
     }
 
-    // Complimentary access unlocks every feature, whatever plan the user once had.
-    const planDoc = viaStore ? { productIdentifier: doc.storeSubscription.productId } : doc;
+    const planDoc = planDocForFeatureCheck(doc, { viaStore, viaComplimentary });
     if (!viaComplimentary && !planAllowsFeature(planDoc, req.requiredFeature)) {
       return res.status(403).json({
         success: false,
@@ -128,7 +139,9 @@ async function requirePremium(req, res, next) {
       complimentary: viaComplimentary,
       store: viaStore ? doc.storeSubscription.provider : undefined,
       status: viaStore ? doc.storeSubscription.state : doc.status,
-      productIdentifier: viaStore ? doc.storeSubscription.productId : doc.productIdentifier,
+      productIdentifier: viaStore
+        ? doc.storeSubscription.productId
+        : doc.productIdentifier,
       isOnTrial: viaStore ? doc.storeSubscription.isOnTrial : doc.isOnTrial,
       willRenew: viaStore ? doc.storeSubscription.autoRenew : doc.willRenew,
       expirationDate: viaStore ? doc.storeSubscription.expiresAt : doc.expirationDate,
@@ -181,6 +194,7 @@ module.exports = {
   requireFeatureEnabled,
   complimentaryActive,
   entitlementStillValid,
+  hasAnyPremiumEntitlement,
   planAllowsFeature,
   isForcePremium,
 };

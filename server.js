@@ -137,11 +137,23 @@ app.options('*', cors(corsOptions));
 
 // Public routes (no authentication required)
 app.get('/api/public/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  let appleIapConfigured = false;
+  let googlePlayConfigured = false;
+  try {
+    appleIapConfigured = require('./services/storeBilling/appleService').isConfigured();
+    googlePlayConfigured = require('./services/storeBilling/googleService').isConfigured();
+  } catch (_) {
+    /* optional in minimal deploys */
+  }
+  res.json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
-    message: 'SYM API is running'
+    message: 'SYM API is running',
+    billing: {
+      appleIapConfigured,
+      googlePlayConfigured,
+    },
   });
 });
 

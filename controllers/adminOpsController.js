@@ -15,6 +15,8 @@ const DailyInsight = require('../models/DailyInsight');
 const OnboardingContent = require('../models/OnboardingContent');
 const MindfulnessCatalogBook = require('../models/MindfulnessCatalogBook');
 const Doctor = require('../models/Doctor');
+const Clinic = require('../models/Clinic');
+const { serializeClinic } = require('../services/clinicQueryService');
 const appConfig = require('../services/appConfigService');
 const push = require('../services/pushBroadcastService');
 const { DAILY_INSIGHT_CATEGORY_IDS } = require('../constants/dailyInsightCategories');
@@ -629,6 +631,96 @@ async function createDoctor(req, res) {
   }
 }
 
+function clinicPayload(body) {
+  const b = body || {};
+  const num = (v, fallback = 0) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  return {
+    name: str(b.name, 200),
+    address: str(b.address, 500),
+    phone: str(b.phone, 40),
+    hours: str(b.hours, 200),
+    city: str(b.city, 120),
+    state: str(b.state, 8).toUpperCase(),
+    description: str(b.description, 2000),
+    website: str(b.website, 500),
+    type: str(b.type, 80) || 'primary_care',
+    latitude: num(b.latitude),
+    longitude: num(b.longitude),
+    rating: num(b.rating, 0),
+    acceptingNewPatients: b.acceptingNewPatients !== false,
+    openNow: b.openNow !== false,
+    offersReferrals: b.offersReferrals !== false,
+    isPublished: b.isPublished !== false,
+    imageUrl: str(b.imageUrl, 500),
+  };
+}
+
+async function getClinic(req, res) {
+  try {
+    if (!isObjectId(req.params.id)) return fail(res, 400, 'Invalid clinic id');
+    const doc = await Clinic.findById(req.params.id);
+    if (!doc) return fail(res, 404, 'Clinic not found');
+    return ok(res, serializeClinic(doc));
+  } catch (err) {
+    console.error('[adminOps] getClinic failed:', err);
+    return fail(res, 500, 'Failed to load clinic');
+  }
+}
+
+async function createClinic(req, res) {
+  try {
+    const data = clinicPayload(req.body);
+    if (!data.name || !data.address) {
+      return fail(res, 400, 'Name and address are required');
+    }
+    const doc = await Clinic.create(data);
+    await audit(req, 'clinic.create', 'clinic', doc._id);
+    return res.status(201).json({ success: true, data: { id: String(doc._id) } });
+  } catch (err) {
+    if (err.name === 'ValidationError') return fail(res, 400, err.message);
+    console.error('[adminOps] createClinic failed:', err);
+    return fail(res, 500, 'Failed to create clinic');
+  }
+}
+
+async function updateClinic(req, res) {
+  try {
+    if (!isObjectId(req.params.id)) return fail(res, 400, 'Invalid clinic id');
+    const data = clinicPayload(req.body);
+    if (!data.name || !data.address) {
+      return fail(res, 400, 'Name and address are required');
+    }
+    const doc = await Clinic.findByIdAndUpdate(
+      req.params.id,
+      { $set: data },
+      { new: true, runValidators: true },
+    );
+    if (!doc) return fail(res, 404, 'Clinic not found');
+    await audit(req, 'clinic.update', 'clinic', req.params.id);
+    return ok(res, { id: String(doc._id) });
+  } catch (err) {
+    if (err.name === 'ValidationError') return fail(res, 400, err.message);
+    console.error('[adminOps] updateClinic failed:', err);
+    return fail(res, 500, 'Failed to update clinic');
+  }
+}
+
+async function deleteClinic(req, res) {
+  try {
+    if (!isObjectId(req.params.id)) return fail(res, 400, 'Invalid clinic id');
+    const doc = await Clinic.findByIdAndDelete(req.params.id);
+    if (!doc) return fail(res, 404, 'Clinic not found');
+    await audit(req, 'clinic.delete', 'clinic', req.params.id);
+    return ok(res, { id: String(doc._id) });
+  } catch (err) {
+    console.error('[adminOps] deleteClinic failed:', err);
+    return fail(res, 500, 'Failed to delete clinic');
+  }
+}
+
 async function updateDoctor(req, res) {
   try {
     if (!isObjectId(req.params.id)) return fail(res, 400, 'Invalid doctor id');
@@ -668,4 +760,8 @@ module.exports = {
   getDoctor,
   createDoctor,
   updateDoctor,
+  getClinic,
+  createClinic,
+  updateClinic,
+  deleteClinic,
 };
