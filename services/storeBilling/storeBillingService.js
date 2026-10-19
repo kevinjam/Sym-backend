@@ -9,7 +9,7 @@ const mongoose = require('mongoose');
 const UserSubscription = require('../../models/UserSubscription');
 const apple = require('./appleService');
 const google = require('./googleService');
-const { storeEntitlementActive } = require('./entitlement');
+const { storeEntitlementActive, topLevelStatus } = require('./entitlement');
 
 const PROVIDERS = { apple, google };
 const REFRESH_AFTER_MS = 6 * 60 * 60 * 1000;
@@ -68,13 +68,28 @@ async function bindStoreState(userId, state, { eventType } = {}) {
     if (ownerId && ownerId !== id) throw new OwnershipConflictError();
   }
 
+  const stored = toStored(state, eventType);
   const set = {
     appUserId: id,
     revenueCatAppUserId: id, // legacy unique key — keep in sync
-    storeSubscription: toStored(state, eventType),
+    storeSubscription: stored,
     lastSyncedAt: new Date(),
   };
   if (isObjectId(id)) set.userId = new mongoose.Types.ObjectId(id);
+
+  // Keep legacy top-level fields in sync so requirePremium and older clients
+  // see premium without re-deriving from storeSubscription every time.
+  if (state.entitled) {
+    set.hasPremium = true;
+    set.isOnTrial = Boolean(stored.isOnTrial);
+    set.productIdentifier = stored.productId;
+    set.expirationDate = stored.expiresAt || null;
+    set.willRenew = Boolean(stored.autoRenew);
+    set.status = topLevelStatus(stored);
+  } else if (stored.provider) {
+    set.hasPremium = false;
+    set.status = 'expired';
+  }
 
   try {
     return await UserSubscription.findOneAndUpdate(
@@ -124,5 +139,6 @@ module.exports = {
   bindStoreState,
   findOwner,
   refreshIfStale,
+  subscriptionLookupFilter: lookupFilter,
   PROVIDERS,
 };

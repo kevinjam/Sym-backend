@@ -1,6 +1,21 @@
 const axios = require('axios');
 const Clinic = require('../models/Clinic');
+const clinicQuery = require('../services/clinicQueryService');
 const { fetchSaintAlphonsusLocations, filterLocationsByCityState, getCityCoordinates, clearAllCaches } = require('../utils/saintAlphonsusScraper');
+
+function clinicDataSource() {
+  return String(process.env.CLINIC_SOURCE || 'database').toLowerCase();
+}
+
+async function getClinicsFromDatabase(req, res) {
+  const data = await clinicQuery.listClinics(req.query);
+  return res.json({
+    success: true,
+    data,
+    source: 'database',
+    count: data.length,
+  });
+}
 
 // Helper function to check if a city is in Idaho
 function isIdahoCity(cityName) {
@@ -88,6 +103,15 @@ const fetchClinicsFromNPI = async ({ city, state, specialty, limit = 50 }) => {
 
 // GET /api/clinics
 const getClinics = async (req, res) => {
+  if (clinicDataSource() === 'database') {
+    try {
+      return await getClinicsFromDatabase(req, res);
+    } catch (error) {
+      console.error('Error fetching clinics (database):', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch clinics' });
+    }
+  }
+
   try {
     const {
       city,
@@ -644,6 +668,14 @@ const getClinics = async (req, res) => {
 const getClinicById = async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (clinicDataSource() === 'database') {
+      const clinic = await clinicQuery.getClinicById(id);
+      if (!clinic) {
+        return res.status(404).json({ success: false, error: 'Clinic not found' });
+      }
+      return res.json({ success: true, data: clinic });
+    }
     
     // Check if it's a Saint Alphonsus clinic ID (including fallback IDs)
     if (id.startsWith('saint-alphonsus-') || id.startsWith('sa-fallback-')) {
@@ -898,6 +930,24 @@ const clearCache = async (req, res) => {
 
 // GET /api/clinics/search - Search clinics by name, phone, or location
 const searchClinics = async (req, res) => {
+  if (clinicDataSource() === 'database') {
+    try {
+      const result = await clinicQuery.searchClinics(req.query);
+      if (result.error) {
+        return res.status(result.status || 400).json({ success: false, error: result.error });
+      }
+      return res.json({
+        success: true,
+        data: result.data,
+        source: 'database',
+        count: result.data.length,
+      });
+    } catch (error) {
+      console.error('Error searching clinics (database):', error);
+      return res.status(500).json({ success: false, error: 'Failed to search clinics' });
+    }
+  }
+
   try {
     const { 
       q, 
@@ -1255,6 +1305,21 @@ const searchClinics = async (req, res) => {
   }
 };
 
-module.exports = { getClinics, getClinicById, searchClinics, testScraper, clearCache };
+const getClinicDefaults = async (req, res) => {
+  try {
+    return res.json({ success: true, data: clinicQuery.publicDefaults() });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: 'Failed to load clinic defaults' });
+  }
+};
+
+module.exports = {
+  getClinics,
+  getClinicById,
+  searchClinics,
+  getClinicDefaults,
+  testScraper,
+  clearCache,
+};
 
 

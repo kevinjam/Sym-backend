@@ -45,6 +45,10 @@ router.delete('/catalog/:type/:id', admin.deleteCatalogItem);
 router.get('/doctors', admin.listDoctors);
 router.put('/doctors/:id/status', admin.setDoctorStatus);
 router.get('/clinics', admin.listClinics);
+router.get('/clinics/:id', ops.getClinic);
+router.post('/clinics', requireSuperAdmin, ops.createClinic);
+router.put('/clinics/:id', requireSuperAdmin, ops.updateClinic);
+router.delete('/clinics/:id', requireSuperAdmin, ops.deleteClinic);
 
 router.get('/insights', admin.listInsights);
 router.put('/insights/:id/status', admin.setInsightStatus);
