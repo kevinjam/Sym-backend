@@ -13,6 +13,7 @@
     "seed-categories": "node utils/seedCategoriesAndDosageForms.js",
     "seed-daily-insights": "node scripts/seed-daily-insights.js",
     "seed-clinics": "node scripts/seed-clinics.js",
+    "fetch-apple-root-certs": "node scripts/fetch-apple-root-certs.js",
     "create-test-patient": "node utils/createTestPatientAndPrescription.js",
     "create-prescription": "node utils/createPrescriptionForExistingPatient.js",
     "lint": "eslint .",

@@ -138,12 +138,19 @@ app.options('*', cors(corsOptions));
 // Public routes (no authentication required)
 app.get('/api/public/health', (req, res) => {
   let appleIapConfigured = false;
+  let appleIap = null;
   let googlePlayConfigured = false;
   try {
-    appleIapConfigured = require('./services/storeBilling/appleService').isConfigured();
-    googlePlayConfigured = require('./services/storeBilling/googleService').isConfigured();
+    const apple = require('./services/storeBilling/appleService');
+    appleIapConfigured = apple.isConfigured();
+    appleIap = apple.configStatus();
   } catch (_) {
     /* optional in minimal deploys */
+  }
+  try {
+    googlePlayConfigured = require('./services/storeBilling/googleService').isConfigured();
+  } catch (_) {
+    /* optional */
   }
   res.json({
     status: 'OK',
@@ -153,6 +160,7 @@ app.get('/api/public/health', (req, res) => {
     billing: {
       appleIapConfigured,
       googlePlayConfigured,
+      appleIap,
     },
   });
 });

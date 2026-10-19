@@ -44,8 +44,9 @@ function readPrivateKey() {
   if (inline) return inline.replace(/\\n/g, '\n');
   const configured = String(process.env.APPLE_IAP_PRIVATE_KEY_PATH || '').trim();
   if (!configured) return '';
-  // Relative paths resolve from the backend root, like the certificates folder.
-  const file = path.resolve(BACKEND_ROOT, configured);
+  const file = path.isAbsolute(configured)
+    ? configured
+    : path.resolve(BACKEND_ROOT, configured);
   try {
     return fs.readFileSync(file, 'utf8');
   } catch (err) {
@@ -67,7 +68,9 @@ function readPrivateKey() {
 /** Where Apple's root certificates live. Defaults to <backend>/certs/apple. */
 function rootCertsDir() {
   const configured = String(process.env.APPLE_ROOT_CERTS_DIR || '').trim();
-  return path.resolve(BACKEND_ROOT, configured || path.join('certs', 'apple'));
+  if (!configured) return path.join(BACKEND_ROOT, 'certs', 'apple');
+  if (path.isAbsolute(configured)) return configured;
+  return path.resolve(BACKEND_ROOT, configured);
 }
 
 function readRootCertificates() {
@@ -84,14 +87,44 @@ function appAppleId() {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/** Safe diagnostics for health checks / deploy logs (no secrets). */
+function configStatus() {
+  const keyId = Boolean(String(process.env.APPLE_IAP_KEY_ID || '').trim());
+  const issuerId = Boolean(String(process.env.APPLE_IAP_ISSUER_ID || '').trim());
+  const appId = appAppleId();
+  const privateKeyPath = String(process.env.APPLE_IAP_PRIVATE_KEY_PATH || '').trim();
+  const privateKeyInline = Boolean(String(process.env.APPLE_IAP_PRIVATE_KEY || '').trim());
+  const key = readPrivateKey();
+  const dir = rootCertsDir();
+  const rootCerts = readRootCertificates();
+  const dirExists = fs.existsSync(dir);
+  return {
+    keyId,
+    issuerId,
+    appAppleId: appId,
+    privateKeyLoaded: Boolean(key),
+    privateKeySource: privateKeyInline ? 'env' : privateKeyPath || null,
+    rootCertsDir: dir,
+    rootCertsDirExists: dirExists,
+    rootCertCount: rootCerts.length,
+    configured: Boolean(keyId && issuerId && key && rootCerts.length > 0 && appId),
+    hints: [
+      !keyId && 'Set APPLE_IAP_KEY_ID',
+      !issuerId && 'Set APPLE_IAP_ISSUER_ID',
+      !appId && 'Set APPLE_APP_ID (numeric App Store Connect app id)',
+      !key &&
+        (privateKeyPath
+          ? `Cannot read IAP private key at ${path.isAbsolute(privateKeyPath) ? privateKeyPath : path.resolve(BACKEND_ROOT, privateKeyPath)}`
+          : 'Set APPLE_IAP_PRIVATE_KEY_PATH or APPLE_IAP_PRIVATE_KEY'),
+      rootCerts.length === 0 &&
+        `No Apple root CA files (.cer/.pem) in ${dir} — run npm run fetch-apple-root-certs (the .p8 key alone is not enough)`,
+      !dirExists && `Directory missing: ${dir}`,
+    ].filter(Boolean),
+  };
+}
+
 function isConfigured() {
-  return Boolean(
-    process.env.APPLE_IAP_KEY_ID &&
-      process.env.APPLE_IAP_ISSUER_ID &&
-      readPrivateKey() &&
-      readRootCertificates().length > 0 &&
-      appAppleId()
-  );
+  return configStatus().configured;
 }
 
 const clients = new Map();
@@ -231,6 +264,7 @@ module.exports = {
   rootCertsDir,
   readPrivateKey,
   readRootCertificates,
+  configStatus,
   isConfigured,
   getSubscriptionState,
   decodeNotification,
