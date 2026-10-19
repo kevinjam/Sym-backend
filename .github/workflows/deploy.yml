@@ -1,12 +1,8 @@
 # Deploy sym-backend to the production VPS (PM2).
 #
-# Repository secrets (your names):
-#   SERVER_IP          — EC2 IP or hostname
-#   SERVER_USER        — SSH user (e.g. ubuntu)
-#   SSH_PRIVATE_KEY    — deploy private key (PEM)
-#   BACKEND_ENV        — full production .env (multiline) → written to .env.production
-#
-# Aliases also accepted: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH
+# Repository secrets:
+#   SERVER_IP, SERVER_USER, SSH_PRIVATE_KEY  — SSH deploy
+#   BACKEND_ENV (optional) — full .env.production; uploaded via scp (not inline in SSH script)
 #
 # Optional: DEPLOY_PATH (default /var/www/sym-backend)
 
@@ -25,7 +21,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Prefer existing Sym-backend secret names; fall back to DEPLOY_* if set.
       SSH_HOST: ${{ secrets.SERVER_IP || secrets.DEPLOY_HOST }}
       SSH_USER: ${{ secrets.SERVER_USER || secrets.DEPLOY_USER }}
       SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.DEPLOY_SSH_KEY }}
@@ -36,13 +31,15 @@ jobs:
         run: |
           set -e
           missing=""
-          [ -z "${SSH_HOST}" ] && missing="${missing} SERVER_IP (or DEPLOY_HOST)"
-          [ -z "${SSH_USER}" ] && missing="${missing} SERVER_USER (or DEPLOY_USER)"
-          [ -z "${SSH_KEY}" ] && missing="${missing} SSH_PRIVATE_KEY (or DEPLOY_SSH_KEY)"
-          [ -z "${APP_ENV}" ] && missing="${missing} BACKEND_ENV (or PRODUCTION_ENV)"
+          [ -z "${SSH_HOST}" ] && missing="${missing} SERVER_IP"
+          [ -z "${SSH_USER}" ] && missing="${missing} SERVER_USER"
+          [ -z "${SSH_KEY}" ] && missing="${missing} SSH_PRIVATE_KEY"
           if [ -n "${missing}" ]; then
             echo "::error::Missing repository secrets:${missing}"
             exit 1
+          fi
+          if [ -z "${APP_ENV}" ]; then
+            echo "::warning::BACKEND_ENV not set — existing .env.production on the server will be kept."
           fi
           echo "Deploy target: ${SSH_USER}@${SSH_HOST}:${REMOTE_PATH}"
 
@@ -62,12 +59,17 @@ jobs:
           fi
 
       - name: Configure SSH
-        working-directory: ${{ steps.app.outputs.dir }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${SSH_KEY}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Ensure deploy directory is writable
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${SSH_USER}@${SSH_HOST}" \
+            "sudo mkdir -p '${REMOTE_PATH}' && sudo chown -R '${SSH_USER}:${SSH_USER}' '${REMOTE_PATH}'"
 
       - name: Rsync application to server
         working-directory: ${{ steps.app.outputs.dir }}
@@ -83,29 +85,33 @@ jobs:
             --exclude certs \
             ./ "${SSH_USER}@${SSH_HOST}:${REMOTE_PATH}/"
 
-      - name: Install deps, write env, restart PM2
+      - name: Upload .env.production
+        if: env.APP_ENV != ''
+        env:
+          APP_ENV: ${{ env.APP_ENV }}
+        run: |
+          ENV_FILE="${RUNNER_TEMP}/sym.env.production"
+          printf '%s\n' "$APP_ENV" > "${ENV_FILE}"
+          echo "Uploading .env.production ($(wc -l < "${ENV_FILE}") lines)"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${ENV_FILE}" \
+            "${SSH_USER}@${SSH_HOST}:${REMOTE_PATH}/.env.production"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${SSH_USER}@${SSH_HOST}" \
+            "chmod 600 '${REMOTE_PATH}/.env.production' && rm -f '${REMOTE_PATH}/.env'"
+
+      - name: Install dependencies and restart PM2
         uses: appleboy/ssh-action@v1.2.0
         env:
-          BACKEND_ENV: ${{ env.APP_ENV }}
-          DEPLOY_PATH: ${{ env.REMOTE_PATH }}
+          REMOTE_PATH: ${{ env.REMOTE_PATH }}
         with:
           host: ${{ env.SSH_HOST }}
           username: ${{ env.SSH_USER }}
           key: ${{ env.SSH_KEY }}
-          envs: BACKEND_ENV,DEPLOY_PATH
+          envs: REMOTE_PATH
           script: |
-            set -euo pipefail
-            APP_DIR="${DEPLOY_PATH:-/var/www/sym-backend}"
-            cd "${APP_DIR}"
-
-            printf '%s\n' "${BACKEND_ENV}" > "${APP_DIR}/.env.production"
-            chmod 600 "${APP_DIR}/.env.production"
-
-            if [ -f "${APP_DIR}/.env" ] && ! grep -q '^MONGODB_URI=mongodb+srv:' "${APP_DIR}/.env" 2>/dev/null; then
-              echo "Removing stale ${APP_DIR}/.env (no Atlas MONGODB_URI)"
-              rm -f "${APP_DIR}/.env"
-            fi
-
+            set -e
+            cd "${REMOTE_PATH}"
             npm ci --omit=dev
             if pm2 describe sym-backend >/dev/null 2>&1; then
               pm2 reload ecosystem.config.cjs --env production --update-env
@@ -113,6 +119,5 @@ jobs:
               pm2 start ecosystem.config.cjs --env production
             fi
             pm2 save
-
             pm2 logs sym-backend --lines 25 --nostream || true
-            curl -sf "http://127.0.0.1:9000/api/public/health" || echo "health check failed"
+            curl -sf http://127.0.0.1:9000/api/public/health || echo "health check failed"
