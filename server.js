@@ -8,7 +8,33 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const http = require('http');
 const socketIo = require('socket.io');
-require('dotenv').config();
+const fs = require('fs');
+// dotenv only reads `.env` by default. On the server you may deploy `.env.production` instead.
+(function loadEnv() {
+  const root = __dirname;
+  const explicit = process.env.ENV_FILE;
+  const hasEnv = fs.existsSync(path.join(root, '.env'));
+  const hasProd = fs.existsSync(path.join(root, '.env.production'));
+  const candidates = [];
+  if (explicit) {
+    candidates.push(explicit);
+  } else {
+    if (process.env.NODE_ENV === 'production' && hasProd) candidates.push('.env.production');
+    if (hasEnv) candidates.push('.env');
+    if (!hasEnv && hasProd) candidates.push('.env.production');
+  }
+  for (const name of candidates) {
+    const file = path.isAbsolute(name) ? name : path.join(root, name);
+    if (fs.existsSync(file)) {
+      require('dotenv').config({ path: file });
+      if (process.env.NODE_ENV !== 'test') {
+        console.log(`[env] Loaded ${path.basename(file)}`);
+      }
+      return;
+    }
+  }
+  require('dotenv').config();
+})();
 
 // Node 18 compatibility: some transitive deps (e.g. undici) expect global File/Blob.
 if (typeof globalThis.Blob === 'undefined') {
