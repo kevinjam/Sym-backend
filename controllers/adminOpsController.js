@@ -17,6 +17,7 @@ const MindfulnessCatalogBook = require('../models/MindfulnessCatalogBook');
 const Doctor = require('../models/Doctor');
 const Clinic = require('../models/Clinic');
 const { serializeClinic } = require('../services/clinicQueryService');
+const { seedStarterClinics } = require('../services/clinicSeedService');
 const appConfig = require('../services/appConfigService');
 const push = require('../services/pushBroadcastService');
 const { DAILY_INSIGHT_CATEGORY_IDS } = require('../constants/dailyInsightCategories');
@@ -708,6 +709,18 @@ async function updateClinic(req, res) {
   }
 }
 
+async function seedClinics(req, res) {
+  try {
+    const force = req.body?.force === true;
+    const result = await seedStarterClinics({ force });
+    await audit(req, 'clinic.seed', 'clinic', null, result);
+    return ok(res, result);
+  } catch (err) {
+    console.error('[adminOps] seedClinics failed:', err);
+    return fail(res, 500, 'Failed to seed clinics');
+  }
+}
+
 async function deleteClinic(req, res) {
   try {
     if (!isObjectId(req.params.id)) return fail(res, 400, 'Invalid clinic id');
@@ -764,4 +777,5 @@ module.exports = {
   createClinic,
   updateClinic,
   deleteClinic,
+  seedClinics,
 };

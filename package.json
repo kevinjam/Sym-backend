@@ -12,6 +12,7 @@
     "clear-db": "node utils/clearDatabase.js",
     "seed-categories": "node utils/seedCategoriesAndDosageForms.js",
     "seed-daily-insights": "node scripts/seed-daily-insights.js",
+    "seed-clinics": "node scripts/seed-clinics.js",
     "create-test-patient": "node utils/createTestPatientAndPrescription.js",
     "create-prescription": "node utils/createPrescriptionForExistingPatient.js",
     "lint": "eslint .",
