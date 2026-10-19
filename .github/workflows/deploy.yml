@@ -1,13 +1,14 @@
 # Deploy sym-backend to the production VPS (PM2).
 #
-# Required GitHub repository secrets:
-#   DEPLOY_HOST     — server IP or hostname
-#   DEPLOY_USER     — SSH user (e.g. ubuntu)
-#   DEPLOY_SSH_KEY  — private key for SSH (full PEM)
-#   BACKEND_ENV     — full production env file (multiline). Written to .env.production each deploy.
+# Repository secrets (your names):
+#   SERVER_IP          — EC2 IP or hostname
+#   SERVER_USER        — SSH user (e.g. ubuntu)
+#   SSH_PRIVATE_KEY    — deploy private key (PEM)
+#   BACKEND_ENV        — full production .env (multiline) → written to .env.production
 #
-# Optional secret:
-#   DEPLOY_PATH     — default /var/www/sym-backend
+# Aliases also accepted: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH
+#
+# Optional: DEPLOY_PATH (default /var/www/sym-backend)
 
 name: Deploy backend
 
@@ -23,29 +24,55 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
+    env:
+      # Prefer existing Sym-backend secret names; fall back to DEPLOY_* if set.
+      SSH_HOST: ${{ secrets.SERVER_IP || secrets.DEPLOY_HOST }}
+      SSH_USER: ${{ secrets.SERVER_USER || secrets.DEPLOY_USER }}
+      SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.DEPLOY_SSH_KEY }}
+      APP_ENV: ${{ secrets.BACKEND_ENV || secrets.PRODUCTION_ENV }}
+      REMOTE_PATH: ${{ secrets.DEPLOY_PATH || '/var/www/sym-backend' }}
     steps:
+      - name: Require GitHub secrets
+        run: |
+          set -e
+          missing=""
+          [ -z "${SSH_HOST}" ] && missing="${missing} SERVER_IP (or DEPLOY_HOST)"
+          [ -z "${SSH_USER}" ] && missing="${missing} SERVER_USER (or DEPLOY_USER)"
+          [ -z "${SSH_KEY}" ] && missing="${missing} SSH_PRIVATE_KEY (or DEPLOY_SSH_KEY)"
+          [ -z "${APP_ENV}" ] && missing="${missing} BACKEND_ENV (or PRODUCTION_ENV)"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing repository secrets:${missing}"
+            exit 1
+          fi
+          echo "Deploy target: ${SSH_USER}@${SSH_HOST}:${REMOTE_PATH}"
+
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Locate backend root in this repo
+        id: app
+        run: |
+          if [ -f server.js ] && [ -f package.json ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          elif [ -f backend/server.js ] && [ -f backend/package.json ]; then
+            echo "dir=backend" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Could not find server.js"
+            exit 1
+          fi
+
       - name: Configure SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        working-directory: ${{ steps.app.outputs.dir }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          printf '%s\n' "${SSH_KEY}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Rsync application to server
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        working-directory: ${{ steps.app.outputs.dir }}
         run: |
-          TARGET="${DEPLOY_PATH:-/var/www/sym-backend}"
+          echo "Syncing to ${SSH_USER}@${SSH_HOST}:${REMOTE_PATH}/"
           rsync -avz --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
             --exclude node_modules \
@@ -54,27 +81,22 @@ jobs:
             --exclude .git \
             --exclude coverage \
             --exclude certs \
-            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${TARGET}/"
+            ./ "${SSH_USER}@${SSH_HOST}:${REMOTE_PATH}/"
 
       - name: Install deps, write env, restart PM2
         uses: appleboy/ssh-action@v1.2.0
         env:
-          BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BACKEND_ENV: ${{ env.APP_ENV }}
+          DEPLOY_PATH: ${{ env.REMOTE_PATH }}
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ env.SSH_HOST }}
+          username: ${{ env.SSH_USER }}
+          key: ${{ env.SSH_KEY }}
           envs: BACKEND_ENV,DEPLOY_PATH
           script: |
             set -euo pipefail
             APP_DIR="${DEPLOY_PATH:-/var/www/sym-backend}"
             cd "${APP_DIR}"
-
-            if [ -z "${BACKEND_ENV:-}" ]; then
-              echo "ERROR: Set GitHub secret BACKEND_ENV to your full production .env contents."
-              exit 1
-            fi
 
             printf '%s\n' "${BACKEND_ENV}" > "${APP_DIR}/.env.production"
             chmod 600 "${APP_DIR}/.env.production"
@@ -92,7 +114,5 @@ jobs:
             fi
             pm2 save
 
-            echo "--- recent logs ---"
             pm2 logs sym-backend --lines 25 --nostream || true
-            echo "--- health ---"
             curl -sf "http://127.0.0.1:9000/api/public/health" || echo "health check failed"
