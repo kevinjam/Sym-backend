@@ -9,29 +9,47 @@ const rateLimit = require('express-rate-limit');
 const http = require('http');
 const socketIo = require('socket.io');
 const fs = require('fs');
-// dotenv only reads `.env` by default. On the server you may deploy `.env.production` instead.
+// Load env before any other config (Firebase, Mongo, etc.).
 (function loadEnv() {
   const root = __dirname;
-  const explicit = process.env.ENV_FILE;
-  const hasEnv = fs.existsSync(path.join(root, '.env'));
-  const hasProd = fs.existsSync(path.join(root, '.env.production'));
-  const candidates = [];
-  if (explicit) {
-    candidates.push(explicit);
-  } else {
-    if (process.env.NODE_ENV === 'production' && hasProd) candidates.push('.env.production');
-    if (hasEnv) candidates.push('.env');
-    if (!hasEnv && hasProd) candidates.push('.env.production');
+  const envPath = path.join(root, '.env');
+  const prodPath = path.join(root, '.env.production');
+
+  function resolveExplicit(file) {
+    return path.isAbsolute(file) ? file : path.join(root, file);
   }
-  for (const name of candidates) {
-    const file = path.isAbsolute(name) ? name : path.join(root, name);
-    if (fs.existsSync(file)) {
-      require('dotenv').config({ path: file });
-      if (process.env.NODE_ENV !== 'test') {
-        console.log(`[env] Loaded ${path.basename(file)}`);
-      }
-      return;
+
+  function hasAtlasUri(filePath) {
+    try {
+      return /^\s*MONGODB_URI=mongodb\+srv:/m.test(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      return false;
     }
+  }
+
+  let fileToLoad = null;
+  const explicit = process.env.ENV_FILE;
+  if (explicit) {
+    fileToLoad = resolveExplicit(explicit);
+  } else if (fs.existsSync(prodPath) && fs.existsSync(envPath)) {
+    // CI often leaves a template `.env` on the server; prefer the real production file.
+    const prodHasAtlas = hasAtlasUri(prodPath);
+    const envHasAtlas = hasAtlasUri(envPath);
+    if (prodHasAtlas && !envHasAtlas) fileToLoad = prodPath;
+    else if (process.env.NODE_ENV === 'production') fileToLoad = prodPath;
+    else fileToLoad = envPath;
+  } else if (fs.existsSync(prodPath)) {
+    fileToLoad = prodPath;
+  } else if (fs.existsSync(envPath)) {
+    fileToLoad = envPath;
+  }
+
+  if (fileToLoad && fs.existsSync(fileToLoad)) {
+    require('dotenv').config({ path: fileToLoad });
+    if (process.env.NODE_ENV !== 'test') {
+      console.log(`[env] Loaded ${path.basename(fileToLoad)} from ${fileToLoad}`);
+    }
+    return;
   }
   require('dotenv').config();
 })();

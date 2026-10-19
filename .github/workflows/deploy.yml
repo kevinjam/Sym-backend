@@ -1,138 +1,98 @@
-# Deploy Node backend over SSH to AWS (EC2 or similar).
+# Deploy sym-backend to the production VPS (PM2).
 #
-# Required GitHub secrets:
-#   SSH_PRIVATE_KEY   — PEM/OpenSSH private key for deploy user (full multiline key)
-#   SERVER_IP         — Public IP or DNS of the app host
-#   SERVER_USER       — SSH user (e.g. ubuntu, ec2-user, deploy)
+# Required GitHub repository secrets:
+#   DEPLOY_HOST     — server IP or hostname
+#   DEPLOY_USER     — SSH user (e.g. ubuntu)
+#   DEPLOY_SSH_KEY  — private key for SSH (full PEM)
+#   BACKEND_ENV     — full production env file (multiline). Written to .env.production each deploy.
 #
-# Optional repository variable:
-#   BACKEND_DEPLOY_PATH — Absolute app directory on the server (default: /var/www/sym-backend)
+# Optional secret:
+#   DEPLOY_PATH     — default /var/www/sym-backend
 
-name: Deploy to AWS
+name: Deploy backend
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: sym-backend-aws
-  cancel-in-progress: false
-
-permissions:
-  contents: read
+  group: sym-backend-production
+  cancel-in-progress: true
 
 jobs:
   deploy:
-    name: SSH deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    defaults:
+      run:
+        working-directory: .
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SERVER_HOST: ${{ secrets.SERVER_IP }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
-          set -euo pipefail
-          if [ -z "${SSH_PRIVATE_KEY}" ] || [ -z "${SERVER_HOST}" ]; then
-            echo "::error::SSH_PRIVATE_KEY and SERVER_IP secrets must be set."
-            exit 1
-          fi
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/sym-deploy
-          chmod 600 ~/.ssh/sym-deploy
-          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Deploy on server
+      - name: Rsync application to server
         env:
-          SERVER_HOST: ${{ secrets.SERVER_IP }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          DEPLOY_PATH: ${{ vars.BACKEND_DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          set -euo pipefail
-          if [ -z "${SERVER_USER:-}" ]; then
-            echo "::error::SERVER_USER secret must be set."
-            exit 1
-          fi
-          REMOTE_PATH="${DEPLOY_PATH:-/var/www/sym-backend}"
+          TARGET="${DEPLOY_PATH:-/var/www/sym-backend}"
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            --exclude node_modules \
+            --exclude .env \
+            --exclude .env.production \
+            --exclude .git \
+            --exclude coverage \
+            --exclude certs \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${TARGET}/"
 
-          # Pass REMOTE_PATH into the remote shell; quote the heredoc so remote $vars are not expanded locally.
-          ssh -i ~/.ssh/sym-deploy \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            "${SERVER_USER}@${SERVER_HOST}" \
-            "REMOTE_PATH=$(printf '%q' "$REMOTE_PATH") bash -s" <<'REMOTE_EOF'
-          set -euo pipefail
-          APP_NAME="sym-backend"
-          cd "${REMOTE_PATH}"
+      - name: Install deps, write env, restart PM2
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: BACKEND_ENV,DEPLOY_PATH
+          script: |
+            set -euo pipefail
+            APP_DIR="${DEPLOY_PATH:-/var/www/sym-backend}"
+            cd "${APP_DIR}"
 
-          echo ">>> Deploy directory: $(pwd)"
-          echo ">>> Memory before deploy"
-          free -h || true
-
-          ensure_swap() {
-            # Small EC2 boxes (t2/t3.micro) OOM-kill npm without swap.
-            if swapon --show 2>/dev/null | grep -q .; then
-              echo ">>> Swap already present"
-              swapon --show || true
-              return 0
+            if [ -z "${BACKEND_ENV:-}" ]; then
+              echo "ERROR: Set GitHub secret BACKEND_ENV to your full production .env contents."
+              exit 1
             fi
-            echo ">>> Creating 2G swapfile (needs sudo)"
-            if command -v sudo >/dev/null 2>&1; then
-              sudo fallocate -l 2G /swapfile 2>/dev/null \
-                || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
-              sudo chmod 600 /swapfile
-              sudo mkswap /swapfile
-              sudo swapon /swapfile
-              if ! grep -q '^/swapfile ' /etc/fstab 2>/dev/null; then
-                echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
-              fi
-              swapon --show || true
+
+            printf '%s\n' "${BACKEND_ENV}" > "${APP_DIR}/.env.production"
+            chmod 600 "${APP_DIR}/.env.production"
+
+            if [ -f "${APP_DIR}/.env" ] && ! grep -q '^MONGODB_URI=mongodb+srv:' "${APP_DIR}/.env" 2>/dev/null; then
+              echo "Removing stale ${APP_DIR}/.env (no Atlas MONGODB_URI)"
+              rm -f "${APP_DIR}/.env"
+            fi
+
+            npm ci --omit=dev
+            if pm2 describe sym-backend >/dev/null 2>&1; then
+              pm2 reload ecosystem.config.cjs --env production --update-env
             else
-              echo ">>> No sudo — cannot create swap; npm may still OOM on small instances"
+              pm2 start ecosystem.config.cjs --env production
             fi
-          }
-          ensure_swap
+            pm2 save
 
-          echo ">>> Git sync"
-          git fetch origin main
-          git checkout main
-          # Server drift (e.g. npm install rewriting package-lock.json) must not block deploy.
-          git reset --hard origin/main
-
-          # Free RAM during install — brief downtime, avoids OOM on 1GB instances.
-          if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
-            echo ">>> Stopping PM2 app for install"
-            pm2 stop "${APP_NAME}" || true
-          fi
-
-          echo ">>> Dependencies (production, low-memory)"
-          export NODE_OPTIONS="${NODE_OPTIONS:+${NODE_OPTIONS} }--max-old-space-size=512"
-          # Prefer incremental install when node_modules exists — lower peak RAM than npm ci.
-          if [ -f package-lock.json ] && [ ! -d node_modules ]; then
-            npm ci --omit=dev --no-audit --no-fund --maxsockets=1
-          else
-            npm install --omit=dev --no-audit --no-fund --maxsockets=1
-          fi
-
-          echo ">>> Memory after install"
-          free -h || true
-
-          echo ">>> PM2"
-          if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
-            pm2 restart "${APP_NAME}" --update-env
-          elif [ -f ecosystem.config.cjs ]; then
-            pm2 start ecosystem.config.cjs
-          elif [ -f ecosystem.config.js ]; then
-            pm2 start ecosystem.config.js
-          else
-            pm2 start server.js --name "${APP_NAME}"
-          fi
-
-          pm2 save
-          echo ">>> Done"
-          REMOTE_EOF
+            echo "--- recent logs ---"
+            pm2 logs sym-backend --lines 25 --nostream || true
+            echo "--- health ---"
+            curl -sf "http://127.0.0.1:9000/api/public/health" || echo "health check failed"
