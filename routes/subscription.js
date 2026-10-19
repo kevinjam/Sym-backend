@@ -21,7 +21,7 @@ const {
   restoreSubscription,
 } = require('../controllers/subscriptionController');
 
-// Public Stripe publishable config (no secrets)
+// Public IAP capability flag (no third-party payment keys)
 router.get('/store-config', getStoreConfig);
 
 // Authenticated subscription APIs
