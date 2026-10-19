@@ -45,14 +45,45 @@ const fs = require('fs');
   }
 
   if (fileToLoad && fs.existsSync(fileToLoad)) {
-    require('dotenv').config({ path: fileToLoad });
+    // PM2 may inject stale env from an old `pm2 save`; file values must win on the server.
+    require('dotenv').config({ path: fileToLoad, override: true });
     if (process.env.NODE_ENV !== 'test') {
       console.log(`[env] Loaded ${path.basename(fileToLoad)} from ${fileToLoad}`);
+      logEnvSummary(fileToLoad);
     }
     return;
   }
   require('dotenv').config();
 })();
+
+function logEnvSummary(fileToLoad) {
+  const mongo = String(process.env.MONGODB_URI || '').trim();
+  let mongoHint = 'MISSING (will use localhost fallback)';
+  if (mongo.startsWith('mongodb+srv://')) mongoHint = 'Atlas (mongodb+srv)';
+  else if (mongo.startsWith('mongodb://')) mongoHint = 'mongodb:// (not Atlas)';
+  const firebaseOk = Boolean(
+    process.env.FIREBASE_PROJECT_ID &&
+      process.env.FIREBASE_CLIENT_EMAIL &&
+      process.env.FIREBASE_PRIVATE_KEY,
+  );
+  console.log(`[env] MONGODB_URI: ${mongoHint}`);
+  console.log(`[env] Firebase: ${firebaseOk ? 'configured' : 'incomplete'}`);
+  if (!mongo.startsWith('mongodb+srv://') && fileToLoad) {
+    try {
+      const raw = fs.readFileSync(fileToLoad, 'utf8');
+      const fileHasAtlas = /^\s*MONGODB_URI=mongodb\+srv:/m.test(raw);
+      if (fileHasAtlas && !mongo.startsWith('mongodb+srv://')) {
+        console.warn(
+          '[env] File contains MONGODB_URI=mongodb+srv but process.env does not — check PM2 env / dotenv parse (e.g. broken FIREBASE_PRIVATE_KEY quoting).',
+        );
+      } else if (!fileHasAtlas) {
+        console.warn('[env] Deployed env file has no MONGODB_URI=mongodb+srv line — fix BACKEND_ENV secret or .env.production on disk.');
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 // Node 18 compatibility: some transitive deps (e.g. undici) expect global File/Blob.
 if (typeof globalThis.Blob === 'undefined') {

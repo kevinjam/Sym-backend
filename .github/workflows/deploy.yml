@@ -92,6 +92,13 @@ jobs:
         run: |
           ENV_FILE="${RUNNER_TEMP}/sym.env.production"
           printf '%s\n' "$APP_ENV" > "${ENV_FILE}"
+          if ! grep -q '^MONGODB_URI=mongodb+srv:' "${ENV_FILE}"; then
+            echo "::error::BACKEND_ENV secret is missing a valid MONGODB_URI=mongodb+srv://... line (or the secret was truncated)."
+            exit 1
+          fi
+          if ! grep -q '^FIREBASE_PROJECT_ID=' "${ENV_FILE}"; then
+            echo "::warning::BACKEND_ENV has no FIREBASE_PROJECT_ID — push/auth may not work."
+          fi
           echo "Uploading .env.production ($(wc -l < "${ENV_FILE}") lines)"
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             "${ENV_FILE}" \
